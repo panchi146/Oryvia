@@ -1,6 +1,6 @@
 <div align="center">
 
-![Oryvia logo](../../branding/oryvia-source.png)
+<img src="../../branding/oryvia-source.png" width="160" alt="Oryvia logo" />
 
 <br />
 
@@ -22,7 +22,7 @@
 
 <br />
 
-![Dynamic Island và Dock của Oryvia trên màn hình Windows](../screenshots/desktop.webp)
+<img src="../screenshots/desktop.webp" width="820" alt="Dynamic Island và Dock của Oryvia trên màn hình Windows" />
 
 </div>
 
@@ -43,9 +43,7 @@ Oryvia là một bản fork từ [Nectar](https://github.com/kua8/Nectar) của 
 Một chiếc notch tại mép trên màn hình tự động thích ứng với tác vụ bạn đang làm. Cuộn chuột hoặc vuốt để chuyển chế độ, hoặc ghim cố định như một notch phần cứng.
 
 <div align="center">
-
-![Notch Oryvia hiển thị thời gian và bài hát đang phát](../screenshots/island.png)
-
+<img src="../screenshots/island.png" width="420" alt="Notch Oryvia hiển thị thời gian và bài hát đang phát" />
 </div>
 
 <br />
@@ -74,9 +72,7 @@ Chiều rộng, chiều cao, bo góc và vị trí đều chuyển động trên
 Một thanh tác vụ có thể dịch chuyển linh hoạt. Kéo thả icon để sắp xếp, rê chuột để xem trước cửa sổ, và chuột phải để mở menu thao tác.
 
 <div align="center">
-
-![Thanh Dock Oryvia với các ứng dụng đã ghim](../screenshots/dock.png)
-
+<img src="../screenshots/dock.png" width="520" alt="Thanh Dock Oryvia với các ứng dụng đã ghim" />
 </div>
 
 <br />
