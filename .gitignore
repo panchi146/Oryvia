@@ -1,0 +1,58 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+/release
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Tauri keys
+*.key
+*.key.pub
+
+# Marketing site — hosted separately (Apache, own domain), not part of this repo
+/website/
+
+
+# Build outputs, targets & generated artifacts
+target/
+gen/
+payload.zip
+
+# Release outputs, preview & review bundles
+/release-review/
+/release-preview/
+/release-candidate/
+/build-output/
+
+# Local engineering chat reports (local development only, not part of public source tree)
+/docs/chat/
+
+# OS metadata
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Temp & backup files
+*.tmp
+*.bak
+*~

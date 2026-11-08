@@ -1,0 +1,153 @@
+<div align="center">
+
+<img src="branding/oryvia-source.png" width="160" alt="Oryvia logo" />
+
+<br />
+
+# Oryvia
+
+**A notch and a dock for Windows: physics-animated, reactive, and built to replace your taskbar.**
+
+<br />
+
+<p>
+  <strong>English</strong> &nbsp;·&nbsp; <a href="docs/readme/README.vi.md">Tiếng Việt</a>
+</p>
+
+[![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6?logo=windows&logoColor=white)
+[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/panchi146/Oryvia/releases)
+
+[**Download**](https://github.com/panchi146/Oryvia/releases) &nbsp;·&nbsp; [Features](#features) &nbsp;·&nbsp; [The Notch](#the-notch) &nbsp;·&nbsp; [The Dock](#the-dock) &nbsp;·&nbsp; [Multiple monitors](#multiple-monitors) &nbsp;·&nbsp; [Settings](docs/guides/SETTINGS.md) &nbsp;·&nbsp; [Build from source](#build-from-source)
+
+<br />
+
+<img src="docs/screenshots/desktop.webp" width="820" alt="Oryvia's notch and dock on a Windows desktop" />
+
+</div>
+
+<br />
+
+Oryvia is a fork of [Nectar](https://github.com/kua8/Nectar) by kua8 and contributors, which in turn forked [Bloom](https://github.com/SehajveerSingh2005/bloom) by Sehajveer Singh, and the concept and the codebase it grew from are theirs. It is maintained independently by **Panchi146**, with its own fixes, bilingual localization (English / Tiếng Việt), transactional installer safety, and direction.
+
+## Features
+
+- **A notch that does things.** Music, quick controls, system stats, and a calendar in one spring-animated island at the top of your screen.
+- **A dock that replaces your taskbar.** It mirrors your real taskbar (same pinned apps, same order, real icons and names) and hides the native one.
+- **Native where it counts.** The system tray opens the actual Windows flyout, and Quit ends an app the way Task Manager's End task does.
+- **Yours to shape.** Themes, three visibility modes, per-monitor placement, and every option in a plain `settings.json` you can edit live.
+- **Light on the system.** Audio capture, cursor tracking, and thumbnail work pause themselves when nothing needs them.
+
+## The Notch
+
+A notch at the top of your screen that adapts to what you're doing. Scroll or swipe to change modes, or pin it in place like a hardware notch.
+
+<div align="center">
+<img src="docs/screenshots/island.png" width="420" alt="The Oryvia notch showing the time and now-playing artwork" />
+</div>
+
+<br />
+
+| Mode | What it does |
+| --- | --- |
+| **Music** | Album art, track info, playback controls, and a visualizer that reacts to five frequency bands. |
+| **Command Center** | Wi-Fi, Bluetooth, Do Not Disturb, volume, and brightness without opening Windows Settings, plus a quick Shortcuts Bar. |
+| **Status** | Battery (hidden automatically on desktops without one) and weather, in a layout you choose. |
+| **Calendar** | A month view with a built-in Pomodoro timer and stopwatch with laps. |
+
+Width, height, corner radius, and position each animate on their own spring, so every transition feels physical.
+
+**Visibility modes** (Settings › Notch):
+
+| Mode | Behavior |
+| --- | --- |
+| **Fixed** | Always visible, even over fullscreen apps, like a real hardware notch. |
+| **Smart** | Hides when another window overlaps it and reveals on hover. |
+| **Peek** | Hidden until the cursor reaches the top edge, or a media event or notification arrives. |
+
+In Smart and Peek the notch stays fully clickable when it's revealed. Only a thin strip at the very edge of the screen stays click-through, so it never swallows input meant for a screenshot tool or a game. The notch never reserves desktop space, so it can't leave a gap above maximized windows.
+
+## The Dock
+
+A taskbar that moves. Drag icons to reorder, hover for window previews, and right-click for a context menu that always opens above the dock.
+
+<div align="center">
+<img src="docs/screenshots/dock.png" width="520" alt="The Oryvia dock with pinned apps" />
+</div>
+
+<br />
+
+- **Your taskbar, mirrored.** On first launch Oryvia imports the apps pinned to your Windows taskbar, in the same order, including File Explorer, Discord, and Microsoft Store apps.
+- **Real icons and names.** Windows Settings shows its gear and Task Manager is called "Task Manager", not `taskmgr`.
+- **Pinned and running, separated.** A divider marks the split by default. Turn on **Mix Pinned & Running** to drag any icon anywhere.
+- **Quit means quit.** Right-click › Quit ends the app like End task in Task Manager.
+- **Search built in.** A search icon beside Start opens Windows Search.
+- **Native tray.** The tray button opens the real Windows hidden-icons flyout under the notch.
+
+Dock visibility uses the same **Fixed**, **Smart**, and **Peek** modes as the notch. Fixed reserves screen space like a normal taskbar, Smart hides when a window overlaps it, and Peek stays out of the way until you approach the bottom edge.
+
+## Multiple monitors
+
+The dock and the notch each have a **Show On** setting, chosen separately in Settings:
+
+| Show On | Result |
+| --- | --- |
+| **Primary Monitor** | Shown on your primary display only. This is the default. |
+| **All Monitors** | Every connected display gets its own copy. |
+| **Specific Monitor** | Pinned to one display you choose from a list. |
+
+Because the two are independent, the same app can look very different from one machine to the next:
+
+- **Dock and notch on every monitor.** Each screen looks the same, and each dock reserves its own space at the bottom.
+- **Dock on the primary only.** The other screens have no taskbar at all, since the Windows taskbar is hidden on every monitor while Oryvia's dock is on. Maximized windows there use the full screen.
+- **Notch on one screen, dock on another.** Works fine, and each one follows its own visibility mode.
+- **Dock turned off.** The native Windows taskbar comes back on every monitor.
+
+Extra monitors get their own windows, so **All Monitors** uses somewhat more CPU and memory than a single display. If you're on a low-power machine, keep **Show On** on one monitor.
+
+## Install
+
+1. Download from the [releases page](https://github.com/panchi146/Oryvia/releases):
+   - **Custom Setup (Recommended):** `Oryvia-Setup-1.0.0.exe` — graphical installer featuring per-user / all-users installation and transactional rollback safety.
+   - **Portable Edition:** `oryvia-1.0.0-portable-windows-x64.zip` — extract and run `oryvia.exe` directly without touching the registry.
+2. Choose **Just me** or **All users**. An all-users install asks for administrator permission once.
+3. Oryvia starts with a short splash animation, then the notch and dock appear together.
+
+Oryvia updates itself: a green dot on the notch means an update is ready, and you can turn on **Auto Update** in **Settings › About** (powered by Tauri Updater v2 with Minisign-signed NSIS packages). Current review binaries are open-source and unsigned with commercial Authenticode (`NotSigned`).
+
+**Uninstall** from Windows Settings › Apps, or from **Settings › About** inside Oryvia. Both remove the app and put your native taskbar back safely.
+
+## Build from source
+
+You'll need [Rust](https://rustup.rs/) (v1.77+) and [Bun](https://bun.sh/) (v1.0+).
+
+```bash
+git clone https://github.com/panchi146/Oryvia.git
+cd Oryvia
+bun install
+bun run tauri dev
+```
+
+To produce a release build:
+
+```powershell
+bun run tauri build --no-bundle
+powershell -ExecutionPolicy Bypass -File installer-app/scripts/build-payload.ps1
+cd installer-app && bun run tauri build --no-bundle && cd ..
+```
+
+Or run the full release pipeline: `powershell -ExecutionPolicy Bypass -File scripts/release.ps1`.
+
+## Contributing
+
+Found a bug or have an idea? [Open an issue](https://github.com/panchi146/Oryvia/issues) or send a pull request. Say which Windows version and monitor setup you're on if it's a display bug, since that is often what decides it. For security vulnerability disclosures, please refer to [SECURITY.md](SECURITY.md).
+
+## License & Credits
+
+Oryvia is open source under the [GPLv3](LICENSE) (GPL-3.0-only).
+
+- **Bloom:** Foundational concept and original codebase by [Sehajveer Singh (`sehaz`)](https://github.com/SehajveerSingh2005/bloom) (Copyright © 2026 Sehajveer Singh).
+- **Nectar:** Expanded with calendar, multi-monitor, and custom installer by [kua8 and contributors](https://github.com/kua8/Nectar).
+- **Oryvia:** Maintained by [Panchi146](https://github.com/panchi146) with bilingual localization, installer safety rollback, and Tauri v2 updater.
+
+See [NOTICE](NOTICE) for complete attribution and legal details.

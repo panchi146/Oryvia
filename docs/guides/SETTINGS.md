@@ -1,0 +1,232 @@
+> **Current project: Oryvia, maintained by Panchi146.** The document below is retained from upstream Nectar for historical reference; in Oryvia, `settings.json` is stored under `%APPDATA%\com.panchi146.oryvia\` while retaining `nectar-*` setting keys for compatibility. See [Oryvia documentation](../architecture/ORYVIA_README.md) and [NOTICE](../../NOTICE) for the current identity and licensing.
+
+# Nectar Settings Reference
+
+All settings are stored in `settings.json` in the app config directory (`%APPDATA%/com.kua8.nectar/`, derived from the Tauri app identifier). The file is a flat JSON object with `nectar-` prefixed keys. Nectar watches this file for external changes and applies them in real-time.
+
+## Quick Start
+
+Edit `settings.json` with any text editor while Nectar is running. Changes are applied immediately — no restart required.
+
+```json
+{
+  "nectar-dock-enabled": "true",
+  "nectar-dock-mode": "smart",
+  "nectar-theme-mode": "dark",
+  "nectar-scale": "1.0"
+}
+```
+
+## Settings Keys
+
+### Dock
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nectar-dock-enabled` | `"true"` / `"false"` | `"false"` | Show or hide the Nectar Dock (taskbar replacement). |
+| `nectar-dock-mode` | `"fixed"` / `"smart"` / `"peek"` | `"smart"` | Dock visibility behavior. **fixed** = always visible as AppBar. **smart** = auto-hide when overlapped by another window or a fullscreen app. **peek** = hidden until cursor approaches bottom edge. Smart/peek still reveal on hover and are clickable even over a fullscreen app — only a thin pre-emptive strip right at the screen edge stays click-through, so other apps' own edge-hugging UI (e.g. a Snipping Tool selection) is never intercepted. |
+| `nectar-dock-preview-enabled` | `"true"` / `"false"` | `"true"` | Show window thumbnail previews when hovering dock icons. |
+| `nectar-dock-search-enabled` | `"true"` / `"false"` | `"true"` | Show a search icon next to Start that opens Windows Search (Win+S). |
+| `nectar-dock-calendar-enabled` | `"true"` / `"false"` | `"true"` | Show a calendar icon next to the search icon that opens the Calendar window. The Calendar window is also in the dock's Nectar Options menu, the tray menu, and the notch calendar's open button. |
+| `nectar-dock-icon-only` | `"true"` / `"false"` | `"false"` | Minimal icon-only style (no background/padding around icons). |
+| `nectar-start-icon` | `"default"` / `"windows"` / `custom:<data URI>` | `"default"` | Start button icon in the dock: the Nectar logo, the Windows logo, or an uploaded image (`custom:` followed by its data URI). |
+| `nectar-dock-adaptive` | `"true"` / `"false"` | `"false"` | Fixed dock only. Stretch the dock to full width like a traditional taskbar while a window is maximized, and contract back when it's restored. |
+| `nectar-dock-win-number-enabled` | `"true"` / `"false"` | `"true"` | When the taskbar is replaced, Win+1 through Win+9 activate the matching pinned dock app (focus/minimize if running, launch otherwise) instead of the native taskbar slots. |
+| `nectar-dock-mixed-reorder` | `"true"` / `"false"` | `"false"` | `"false"` = pinned and running icons stay in two separate groups with a divider between them. `"true"` = a single group — any icon, pinned or not, can be dragged anywhere. |
+
+### Notch
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nectar-notch-edge-delay` | number string (ms) | `"200"` | Smart and peek notch only. How long the cursor has to rest on the top edge before the notch peeks, so sweeping across a maximized window's tabs doesn't trigger it. `0` peeks instantly. Maximum `2000`. |
+| `nectar-notch-mode` | `"fixed"` / `"smart"` / `"peek"` | `"fixed"` | Notch (top bar) visibility behavior. **fixed** = always visible, never auto-hides (including over fullscreen apps — matches a real hardware notch, which doesn't disappear either). **smart** = hides when overlapped by another window/fullscreen app, reveals on hover. **peek** = hidden until cursor approaches the top edge, a media event, or a notification. Smart/peek reveal and are fully clickable on hover even over a fullscreen app (only a thin strip right at the screen edge stays click-through, so it never steals input meant for another app). Unlike the Dock, the notch never reserves desktop work-area space, so it never leaves a gap above maximized windows' content. |
+
+### Monitors
+
+The dock and the notch each choose their monitors separately. In Settings this is the **Show On** dropdown on the Dock and Notch tabs.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nectar-dock-monitor-mode` | `"primary"` / `"all"` / `"specific"` | `"primary"` | Where the dock appears. **primary** = your primary display only. **all** = every connected display gets its own dock. **specific** = the single display named in `nectar-dock-monitor-id`. |
+| `nectar-dock-monitor-id` | string | `""` | Windows display name of the monitor to use when the dock mode is `"specific"` (for example `\\.\DISPLAY2`). Set automatically when you pick a monitor in Settings. |
+| `nectar-notch-monitor-mode` | `"primary"` / `"all"` / `"specific"` | `"primary"` | Where the notch appears. Same values as the dock. |
+| `nectar-notch-monitor-id` | string | `""` | Windows display name of the monitor to use when the notch mode is `"specific"`. Set automatically when you pick a monitor in Settings. |
+
+If the chosen monitor is unplugged, Nectar falls back to the primary display.
+
+With **All Monitors** and more than one display, the **Per-Monitor Behavior** toggle on the Dock and Notch tabs gives each monitor its own Fixed / Smart / Peek. Turning it off goes back to one behavior for all of them.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nectar-dock-mode-by-monitor` | JSON string | `"{}"` | Per-monitor dock behavior: a JSON object mapping each Windows display name (as in `nectar-dock-monitor-id`) to `"fixed"`, `"smart"` or `"peek"`. A monitor without an entry uses `nectar-dock-mode`. |
+| `nectar-notch-mode-by-monitor` | JSON string | `"{}"` | Same as above for the notch, falling back to `nectar-notch-mode`. |
+
+### Weather
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nectar-weather-enabled` | `"true"` / `"false"` | `"true"` | Show weather widget in the notch status bar. |
+| `nectar-weather-city` | string | `""` | Manually set city name for weather. Empty string = auto-detect via IP geolocation. |
+| `nectar-weather-lat` | number string | (auto) | Latitude coordinate for weather. Set automatically when a city is selected. |
+| `nectar-weather-lon` | number string | (auto) | Longitude coordinate for weather. Set automatically when a city is selected. |
+| `nectar-weather-cached-temp` | number string | (none) | Cached temperature value shown before next API fetch. |
+| `nectar-weather-cached-condition` | string | (none) | Cached weather condition text (e.g. "Partly Cloudy"). |
+| `nectar-temp-unit` | `"celsius"` / `"fahrenheit"` | `"celsius"` | Temperature display unit. |
+
+### Modules
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nectar-calendar-enabled` | `"true"` / `"false"` | `"true"` | Show the calendar in the notch's calendar panel. |
+| `nectar-timer-enabled` | `"true"` / `"false"` | follows `nectar-calendar-enabled` | Show the countdown timer (presets and a custom time) in the notch's calendar panel. |
+| `nectar-timer-sound-enabled` | `"true"` / `"false"` | `"true"` | Play a short chime when the countdown timer finishes. |
+| `nectar-stopwatch-enabled` | `"true"` / `"false"` | follows `nectar-calendar-enabled` | Show the stopwatch (with laps) next to the timer. |
+| `nectar-calendar-view` | `"day"` / `"week"` / `"month"` / `"agenda"` | `"month"` | Which view the notch calendar shows once a calendar source is connected. Set by the Day / Week / Month / Agenda switcher in the notch. |
+| `nectar-music-mode-enabled` | `"true"` / `"false"` | `"true"` | Enable interactive music media widget. |
+| `nectar-music-compact-notch` | `"true"` / `"false"` | `"true"` | Show compact music display (visualizer + artwork) in collapsed notch. |
+
+### Calendar Sync (links and CalDAV)
+
+Read-only sync of your calendars into the notch calendar. Open Settings › Notch › Calendar Sync (shown while Calendar is on). There are two ways to connect, and you can use both at once. Nectar never writes to a server.
+
+- **Calendar links** need no password: paste a Google, iCloud, Outlook, Proton, Nextcloud or any other `.ics` / `webcal://` link. Repeating events, exceptions and time zones are expanded locally.
+- **CalDAV account** (Nextcloud, iCloud, or any CalDAV server) also reads private calendars, using an app password.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nectar-caldav-enabled` | `"true"` / `"false"` | `"false"` | Whether calendar sync is active. Set to `"true"` when you connect and `"false"` when you disconnect. |
+| `nectar-caldav-url` | string | `""` | Server address, for example `cloud.example.com`. A bare host is expanded to `/remote.php/dav/`; you can also give a full CalDAV URL. iCloud uses `https://caldav.icloud.com` (filled in for you) with an app-specific password. |
+| `nectar-caldav-username` | string | `""` | Account username. |
+| `nectar-caldav-interval` | number string | `"15"` | Minutes between background syncs. Minimum `5`. |
+
+`nectar-caldav-interval` applies to every source, links included. After Nectar restarts or crashes it syncs right away instead of waiting out the interval, and retries a few times if the network isn't back yet.
+
+Secrets are **not** in `settings.json`. The CalDAV app password lives in Windows Credential Manager as `Nectar CalDAV`, and each calendar link (which acts like a password, since anyone holding it can read the calendar) lives there as `Nectar Calendar Link`. Everything else is local to the app config directory:
+
+| File | Contents |
+|------|----------|
+| `calendar_links.json` | The names and provider of your calendar links (not the links themselves). |
+| `calendar_cache.json` | Synced events, so the calendar works offline. Nothing is sent to any third-party service. |
+
+Removing a link or disconnecting the account deletes its stored secret and cached events. If a CalDAV server rejects the login, automatic syncing of that account pauses until you reconnect, so a wrong password can't trigger a lockout. Events from 35 days back to 95 days ahead are synced.
+
+### Music Appearance
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nectar-media-layout` | `"classic"` / `"compact"` | `"classic"` | Expanded player style. **classic** = large album art. **compact** = small thumbnail + controls. |
+| `nectar-media-ambience-enabled` | `"true"` / `"false"` | `"true"` | Colored ambient glow behind expanded album art. |
+| `nectar-media-compact-glow-enabled` | `"true"` / `"false"` | `"true"` | Glow effect around the collapsed compact thumbnail. |
+| `nectar-media-visualizer-enabled` | `"true"` / `"false"` | `"true"` | Audio visualizer bars in music mode. Also accepts `nectar-visualizer-enabled` (legacy alias). |
+| `nectar-media-album-art-enabled` | `"true"` / `"false"` | `"true"` | Show album artwork in the notch music display. |
+
+### Overlays
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nectar-volume-overlay-enabled` | `"true"` / `"false"` | `"true"` | Show Nectar volume HUD when volume changes (replaces native Windows OSD). |
+| `nectar-volume-edge-enabled` | `"true"` / `"false"` | `"true"` | Trigger volume HUD by hovering the left screen edge. |
+| `nectar-brightness-overlay-enabled` | `"true"` / `"false"` | `"true"` | Show Nectar brightness HUD when brightness changes. |
+| `nectar-brightness-edge-enabled` | `"true"` / `"false"` | `"true"` | Trigger brightness HUD by hovering the right screen edge. |
+| `nectar-overlay-mouse-wheel` | `"true"` / `"false"` | `"false"` | Enable mouse wheel scrolling on volume and brightness HUDs to adjust values. |
+| `nectar-swap-hud-sides` | `"true"` / `"false"` | `"true"` | Swap HUD positions (volume on right, brightness on left). |
+
+### Appearance
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nectar-theme-mode` | `"dark"` / `"light"` / `"custom"` / `"adaptive"` | `"dark"` | Theme mode. **dark** = dark translucent. **light** = light translucent. **custom** = user-picked color. **adaptive** = follows Windows system accent color. |
+| `nectar-theme-color` | hex string | `"#007aff"` | Custom theme color (used in `custom` and `adaptive` modes). |
+| `nectar-theme-opacity` | float string | `"0.80"` | Background opacity (0.1 to 1.0). |
+| `nectar-theme-saturation` | float string | `"0.50"` | Color saturation for custom/adaptive themes (0.0 to 1.0). |
+| `nectar-theme-brightness` | float string | `"0.15"` | Background brightness for custom/adaptive themes (0.0 to 1.0). |
+| `nectar-corners-enabled` | `"true"` / `"false"` | `"false"` | Render rounded screen corner overlays on top edges. |
+
+### Status Widgets
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nectar-status-widgets` | JSON string | `{"left":["weather"],"right":["battery"]}` | Widget layout in collapsed notch. Available: `"weather"`, `"battery"`, `"cpu"`, `"ram"`, `"disk"`, `"net"`. The `"battery"` widget (and its low-battery/charging pulses) is automatically suppressed on desktops with no physical battery — detected via Windows' `PowerManager.BatteryStatus`, not the browser's Battery API (which fakes a permanent "100%, charging" reading on desktops). It's also silently dropped from a placed config on such machines, even if set manually or imported from a laptop's settings file. |
+
+Example:
+```json
+{
+  "nectar-status-widgets": "{\"left\":[\"cpu\",\"ram\"],\"right\":[\"battery\",\"net\"]}"
+}
+```
+
+### System
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nectar-scale` | float string | `"1.0"` | UI scale factor (0.8 to 1.3). Changing this re-registers AppBars to resize the reserved screen area. |
+| `nectar-low-battery-threshold` | integer string | `"20"` | Battery percentage that triggers the low-battery alert pulse (5 to 50, step 5). |
+| `nectar-auto-update` | `"true"` / `"false"` | `"false"` | Check for and download updates automatically on startup. |
+| `nectar-show-update-indicator` | `"true"` / `"false"` | `"true"` | Show a green dot on the notch when an update is available. |
+| `nectar-hide-in-fullscreen` | `"true"` / `"false"` | `"true"` | Hide the dock, and disable its hover reveal, while a fullscreen app (game or video) is in front. The notch is not affected. |
+| `nectar-time-format-24h` | `"true"` / `"false"` | `"false"` | Use 24-hour clock format in the notch. When `"false"`, displays 12-hour format with AM/PM. |
+
+### Internal (Do Not Edit Manually)
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `nectar-first-run` | sentinel | Set to `"done"` after first launch. Triggers splash screen if absent. |
+| `nectar-app-version` | string | Last known app version. If it differs from current, splash screen is shown on update. |
+
+## Event System
+
+Nectar uses two Tauri events for settings synchronization:
+
+### `settings-changed`
+- **Emitted by:** `save_setting` command (frontend or backend)
+- **Payload:** `{ "key": "nectar-...", "value": ... }`
+- **Purpose:** Broadcasts changes made through the Nectar UI to all windows
+- **Key format:** Nectar-prefixed keys as-is (e.g. `"nectar-dock-mode"`)
+
+### `settings-external-changed`
+- **Emitted by:** File watcher (detects external edits to `settings.json`)
+- **Payload:** `{ "key": "nectar-...", "value": ... }` or `{ "key": "nectar-...", "value": null }` for removed keys
+- **Purpose:** Broadcasts changes made by external editors (VS Code, notepad, scripts)
+- **Key format:** Nectar-prefixed keys as-is
+- **Behavior:** Also syncs values to `localStorage` for instant frontend reads
+
+### Flow
+```
+External editor saves settings.json
+    ↓
+File watcher detects change (ReadDirectoryChangesW)
+    ↓
+Diffs against SETTINGS_CACHE
+    ↓
+Emits settings-external-changed for each changed/removed key
+    ↓
+useSettingsSync hook updates React state + localStorage
+    ↓
+UI re-renders with new values
+```
+
+## Example: Changing Dock Mode via Script
+
+```powershell
+# PowerShell: switch dock to smart mode
+$json = Get-Content "$env:APPDATA\com.kua8.nectar\settings.json" | ConvertFrom-Json
+$json.'nectar-dock-mode' = 'smart'
+$json | ConvertTo-Json | Set-Content "$env:APPDATA\com.kua8.nectar\settings.json"
+```
+
+```python
+# Python: disable dock
+import json, os
+path = os.path.join(os.environ['APPDATA'], 'com.kua8.nectar', 'settings.json')
+with open(path) as f: settings = json.load(f)
+settings['nectar-dock-enabled'] = 'false'
+with open(path, 'w') as f: json.dump(settings, f)
+```
+
+## Notes
+
+- All boolean values are strings (`"true"` / `"false"`) for consistency with `localStorage`.
+- The `useSettingsSync` hook auto-converts `"true"` / `"false"` strings to booleans.
+- `auto-hide` mode values in `nectar-dock-mode` and `nectar-notch-mode` are legacy aliases for `smart` — they are mapped automatically.
+- Changing `nectar-scale` triggers AppBar re-registration to adjust reserved screen space.
+- Theme changes (`nectar-theme-*`) are applied by reading all theme values from `localStorage` and calling `applyTheme()` — the theme system depends on all five theme keys being in sync.

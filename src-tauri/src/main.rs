@@ -1,0 +1,422 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod types;
+mod state;
+mod utils;
+mod services;
+mod commands;
+mod monitors;
+mod updater;
+mod update_policy;
+mod uninstall_registry;
+mod native_uninstall;
+#[path = "../../install_safety.rs"]
+mod install_safety;
+mod diagnostics;
+mod taskbar_pins;
+mod tray_icons;
+mod caldav;
+mod calendar_sync;
+mod ics;
+mod active_look;
+mod drag_drop;
+
+use tauri::Manager;
+use windows::Win32::System::Console::SetConsoleCtrlHandler;
+use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT};
+use windows::core::BOOL;
+use std::sync::atomic::Ordering;
+
+use crate::state::*;
+use crate::utils::*;
+use crate::services::*;
+use crate::commands::*;
+
+unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
+    if ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT || ctrl_type == CTRL_CLOSE_EVENT {
+        set_taskbar_visibility(true, true);
+        NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
+
+    }
+    BOOL(0)
+}
+
+fn main() {
+    if std::env::args().any(|arg| arg == "--restore-taskbar-on-uninstall") {
+        native_uninstall::restore_taskbar_if_left_hidden();
+        return;
+    }
+    if native_uninstall::requested() {
+        native_uninstall::run();
+        return;
+    }
+
+    diagnostics::init();
+
+    unsafe {
+        let _ = SetConsoleCtrlHandler(Some(ctrl_handler), true);
+    }
+
+    // Single-instance enforcement
+    unsafe {
+        use windows::Win32::System::Threading::{CreateMutexW, CreateEventW, OpenEventW, SetEvent, SYNCHRONIZATION_ACCESS_RIGHTS};
+        use windows::Win32::Foundation::{GetLastError, CloseHandle};
+
+        let mutex_name: Vec<u16> = "OryviaSingleInstance".encode_utf16().chain(std::iter::once(0)).collect();
+        let event_name: Vec<u16> = "OryviaOpenSettings".encode_utf16().chain(std::iter::once(0)).collect();
+
+        let h_mutex = CreateMutexW(None, true, windows::core::PCWSTR(mutex_name.as_ptr())).ok();
+        let err = GetLastError();
+
+        if err.0 == 183 {
+            // Another instance is already running — signal it to open settings
+            if let Ok(h_event) = OpenEventW(SYNCHRONIZATION_ACCESS_RIGHTS(0x00100002), false, windows::core::PCWSTR(event_name.as_ptr())) {
+                let _ = SetEvent(h_event);
+                let _ = CloseHandle(h_event);
+            }
+            if let Some(h) = h_mutex { let _ = CloseHandle(h); }
+            return;
+        }
+
+        if let Ok(h_event) = CreateEventW(None, false, false, windows::core::PCWSTR(event_name.as_ptr())) {
+            let _ = SINGLE_INSTANCE_EVENT_HANDLE.set(h_event.0 as isize);
+        }
+        if let Some(h) = h_mutex { let _ = SINGLE_INSTANCE_MUTEX_HANDLE.set(h.0 as isize); }
+    }
+
+    setup_brightness_worker();
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_autostart::Builder::new()
+            .app_name(crate::install_safety::STARTUP_NAME)
+            .build())
+        .invoke_handler(tauri::generate_handler![
+            hide_native_osd,
+            open_settings_window,
+            open_calendar_window,
+            open_tray_window,
+            open_wifi_settings,
+            open_sound_settings,
+            open_notification_center,
+            set_ignore_cursor_events,
+            set_window_height,
+            resize_settings_window,
+            hide_overlay,
+            set_splash_fullscreen,
+            sync_overlay_position,
+            media_play_pause,
+            media_next,
+            media_previous,
+            media_seek,
+            open_media_source_app,
+
+            init_dock,
+            toggle_dock,
+            change_dock_mode,
+            change_notch_mode,
+            sync_appbar,
+            open_app,
+            launch_new_instance,
+            launch_shortcut,
+            is_directory_path,
+            update_dock_rect,
+            update_notch_rect,
+            set_dock_hovered,
+            set_notch_hovered,
+            set_notch_hidden,
+            set_dock_dragging,
+            get_active_windows,
+            get_app_icon,
+            get_installed_apps,
+            save_pinned_apps,
+            load_pinned_apps,
+            import_taskbar_pins_manual,
+            clear_icon_cache,
+            set_custom_icon,
+            remove_custom_icon,
+            get_custom_icons,
+            set_menu_open,
+            focus_window,
+            focus_app_windows,
+            close_window,
+            end_task,
+            quit_nectar,
+            restart_nectar,
+            uninstall_nectar,
+            get_diagnostics,
+            open_log_folder,
+            set_hitbox_logging,
+            get_hitbox_logging,
+            register_notch_drag_drop,
+            set_drag_hitbox_diag,
+            get_drag_hitbox_diag,
+            log_dev_drag_event,
+            get_volume,
+            get_volume_state,
+            get_brightness,
+            set_volume,
+            get_audio_sessions,
+            set_app_volume,
+            set_app_mute,
+            set_volume_mixer_rect,
+            clear_volume_mixer_rect,
+            save_setting,
+            load_settings,
+            reset_settings,
+            capture_window_thumbnail,
+            get_wifi_status,
+            set_wifi_state,
+            get_bluetooth_state,
+            set_bluetooth_state,
+            open_bluetooth_settings,
+            open_airplane_mode_settings,
+            run_quick_action,
+            set_brightness,
+            get_battery_saver_state,
+            has_battery,
+            open_battery_saver_settings,
+            get_system_accent_color,
+            get_monitors,
+            get_dock_mode_for_window,
+            get_notch_mode_for_window,
+            set_dock_mode_for_window,
+            set_notch_mode_for_window,
+            get_cpu_usage,
+            get_ram_usage,
+            get_disk_space,
+            get_network_speed,
+            get_running_processes,
+            kill_process,
+            export_settings,
+            import_settings,
+            reset_settings,
+            read_settings_from_path,
+            write_settings_to_path,
+            updater::check_for_updates,
+            updater::install_update,
+            updater::get_update_state,
+            caldav::caldav_connect,
+            caldav::caldav_disconnect,
+            calendar_sync::caldav_sync_now,
+            calendar_sync::caldav_get_cache,
+            ics::ics_add_link,
+            ics::ics_remove_link,
+            ics::ics_detect
+        ])
+        .setup(|app| {
+            init_taskbar_marker(app.handle());
+            // Crash-recovery: if a previous session was force-killed while the native
+            // taskbar was hidden, restore it now. Runs before the frontend re-hides it
+            // (init_dock fires after a delay), so the flag must be removed first.
+            if std::env::var_os("NECTAR_RESTARTING").is_some() {
+                std::env::remove_var("NECTAR_RESTARTING");
+                RELAUNCHED.store(true, Ordering::Relaxed);
+            } else if taskbar_marker_exists() {
+                RELAUNCHED.store(true, Ordering::Relaxed);
+                restore_taskbar_after_crash();
+                NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
+            }
+
+            crate::utils::init_settings_cache(app.handle());
+
+            #[cfg(not(debug_assertions))]
+            std::thread::spawn(crate::uninstall_registry::heal_uninstall_registration);
+
+            // Update check on startup (non-blocking). Always runs so the UI can
+            // show an update badge; auto-install only happens when the user
+            // enabled it and the release has aged past the rollout gate.
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    updater::run_startup_check(app_handle).await;
+                });
+            }
+
+            crate::calendar_sync::start_background_sync(app.handle().clone());
+
+            let window = app.get_webview_window("main").unwrap();
+            let dock_win = app.get_webview_window("dock").unwrap();
+
+            crate::services::wire_window_events(app.handle(), &window, crate::types::WindowKind::Notch, false);
+            crate::services::wire_window_events(app.handle(), &dock_win, crate::types::WindowKind::Dock, false);
+
+            for label in ["main", "dock", "overlay"] {
+                if let Some(w) = app.get_webview_window(label) {
+                    let _ = w.set_ignore_cursor_events(true);
+                }
+            }
+
+            sync_overlays(app.handle());
+
+            {
+                let ah = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::monitors::sync_monitor_windows(&ah);
+                });
+            }
+
+            // Initialize the overlay window — on Windows, set_position doesn't
+            // take effect on a window that has never been shown. Show it once
+            // to register it with the compositor, then hide immediately.
+            if let Some(ov_win) = app.get_webview_window("overlay") {
+                let _ = ov_win.show();
+                let _ = ov_win.hide();
+                let overlay_handle = app.handle().clone();
+                ov_win.on_window_event(move |e| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+                        api.prevent_close();
+                        restore_taskbar_and_exit(&overlay_handle);
+                    }
+                });
+            }
+
+            watch_webview_processes(app.handle());
+            setup_mouse_hook(app.handle().clone());
+            setup_display_change_monitor(app.handle().clone());
+            setup_window_change_hook(app.handle().clone());
+            {
+                let _ = crate::state::THUMBNAIL_CACHE.set(std::sync::Mutex::new(std::collections::HashMap::new()));
+                let _ = crate::state::FOCUS_TIMESTAMPS.set(std::sync::Mutex::new(std::collections::HashMap::new()));
+                // Set before the scan so it can store results.
+                let _ = crate::state::INSTALLED_APPS_CACHE.set(std::sync::Mutex::new(Vec::new()));
+            }
+            setup_thumbnail_capture(app.handle().clone());
+            trigger_app_scan();
+            let tx = setup_system_worker(app.handle().clone());
+            let _ = COMMAND_SENDER.set(tx.clone());
+            let _hook = services::setup_keyboard_hook(app.handle().clone());
+            setup_taskbar_hook();
+            start_window_style_guard(app.handle().clone());
+            setup_audio_visualization(app.handle().clone());
+            setup_settings_watcher(app.handle().clone());
+
+            // Listen for second-instance signal to open settings
+            if let Some(&h_event) = SINGLE_INSTANCE_EVENT_HANDLE.get() {
+                if h_event != 0 {
+                    let app_handle = app.handle().clone();
+                    std::thread::spawn(move || {
+                        use windows::Win32::System::Threading::{WaitForSingleObject, INFINITE};
+                        use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+                        let h_event = HANDLE(h_event as *mut _);
+                        loop {
+                            let result = unsafe { WaitForSingleObject(h_event, INFINITE) };
+                            if result == WAIT_OBJECT_0 {
+                                crate::commands::open_settings_window(app_handle.clone());
+                            }
+                        }
+                    });
+                }
+            }
+
+            if let Some(settings_win) = app.get_webview_window("settings") {
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = window_vibrancy::apply_acrylic(&settings_win, Some((10, 10, 15, 20)));
+                }
+                if let Ok(hwnd) = settings_win.hwnd() {
+                    crate::active_look::keep_active_look(hwnd);
+                }
+                let win_clone = settings_win.clone();
+                settings_win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = win_clone.hide();
+                    }
+                });
+            }
+            if let Some(calendar_win) = app.get_webview_window("calendar") {
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = window_vibrancy::apply_acrylic(&calendar_win, Some((10, 10, 15, 20)));
+                }
+                if let Ok(hwnd) = calendar_win.hwnd() {
+                    crate::active_look::keep_active_look(hwnd);
+                }
+                let win_clone = calendar_win.clone();
+                calendar_win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = win_clone.hide();
+                    }
+                });
+            }
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+                let quit_item = MenuItem::with_id(app, "quit", "Quit Oryvia", true, None::<&str>)?;
+                let restart_item =
+                    MenuItem::with_id(app, "restart", "Restart Oryvia", true, None::<&str>)?;
+                let settings_item =
+                    MenuItem::with_id(app, "settings", "Open Settings", true, None::<&str>)?;
+                let calendar_item =
+                    MenuItem::with_id(app, "calendar", "Open Calendar", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&calendar_item, &settings_item, &restart_item, &quit_item])?;
+                let ah = app.handle().clone();
+                TrayIconBuilder::new()
+                    .icon(app.default_window_icon().unwrap().clone())
+                    .tooltip("Oryvia")
+                    .menu(&menu)
+                    .on_menu_event(move |_, event| match event.id().as_ref() {
+                        "quit" => {
+                            crate::commands::restore_taskbar_and_exit(&ah);
+                        }
+                        "restart" => {
+                            crate::state::SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Relaxed);
+                            for (label, w) in ah.webview_windows() {
+                                if crate::state::is_notch_label(&label) || crate::state::is_dock_label(&label) {
+                                    if let Ok(hwnd) = w.hwnd() { unregister_appbar_native(hwnd); }
+                                }
+                            }
+                            if let Some(w) = ah.get_webview_window("settings") { let _ = w.destroy(); }
+                            if let Some(w) = ah.get_webview_window("calendar") { let _ = w.destroy(); }
+                            std::env::set_var("NECTAR_RESTARTING", "1");
+                            close_single_instance_handles();
+
+                            ah.restart();
+                        }
+                        "settings" => {
+                            crate::commands::open_settings_window(ah.clone());
+                        }
+                        "calendar" => {
+                            crate::commands::open_calendar_window(ah.clone());
+                        }
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            crate::commands::open_settings_window(tray.app_handle().clone());
+                        }
+                    })
+                    .build(app)?;
+            }
+
+            // Register Windows Native OLE Drop Target for Dynamic Island
+            {
+                let ah = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    crate::drag_drop::register_notch_drop_target(&ah);
+                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    crate::drag_drop::register_notch_drop_target(&ah);
+                });
+            }
+
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    app.run(|_, event| {
+        if let tauri::RunEvent::Exit = event {
+            set_taskbar_visibility(true, true);
+            NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
+
+        }
+    });
+}

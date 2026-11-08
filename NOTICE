@@ -1,0 +1,78 @@
+Oryvia — modified version of Nectar and Bloom, maintained by Panchi146.
+
+Modification notice: 2026-11-08.
+Branding, project metadata, bilingual EN/VI localization, Dynamic Island /
+Control Center adjustments, and install/uninstall safety hardening were added or
+modified by Panchi146 (see docs/history/CHANGELOG_MIGRATION.md,
+docs/history/SOURCE_HISTORY.md, and docs/ISSUE_LOG.md).
+
+ Provenance & Attribution Notices
+ --------------------------------
+1. Original foundational project — Bloom:
+   - Project: https://github.com/SehajveerSingh2005/bloom
+   - Author: Sehajveer Singh (sehaz)
+   - Copyright notice in upstream source: Copyright © 2026 Sehajveer Singh
+     (declared in bloom-main/src-tauri/tauri.conf.json)
+   - License: GNU General Public License v3.0 only (GPL-3.0-only)
+   - Foundational lineage: Origin of the desktop notch, dock, media integration,
+     and OLE child-window drop handling concept.
+
+2. Upstream fork — Nectar:
+   - Project: https://github.com/kua8/Nectar
+   - Attribution: Nectar by kua8 and contributors (authors = ["kua8"] in
+     src-tauri/Cargo.toml and package.json; no copyright notice or year
+     statement is present in upstream Nectar or baseline files)
+   - License: GNU General Public License v3.0 only (GPL-3.0-only)
+   - Fork lineage: Expanded Bloom with calendar integration, multi-monitor
+     support, installer-app custom setup, and safety refinements across
+     Nectar Custom 1.4.1 and selected Nectar 1.9.1 ideas.
+
+3. Modified version — Oryvia:
+   - Maintainer: Panchi146 (https://github.com/panchi146)
+   - Scope: Modifications maintained by Panchi146 (dated 2026-11-08)
+   - License: GNU General Public License v3.0 only (GPL-3.0-only)
+
+All upstream rights and existing notices are retained. The Oryvia name does not
+imply endorsement by Sehajveer Singh, kua8, or upstream contributors.
+
+ License & Distribution Terms (GPLv3)
+ ------------------------------------
+Oryvia as a whole is distributed under GNU General Public License version 3
+(GPL-3.0-only). See the unmodified LICENSE file for the full terms, including the
+absence of warranty (Sections 15–16) and your rights to use, study, modify, and
+redistribute the covered work.
+
+Based on inspection of the Settings / About interface in Bloom 3.10.1
+(src/settings/AboutTab.tsx), Nectar 1.9.4 (src/settings/AboutTab.tsx), and the
+Nectar Custom 1.4.1 baseline, that specific interface displayed an About box
+with version and author links rather than interactive legal notices. Under GPLv3
+Section 5(d) ("if the Program has interactive interfaces that do not display
+Appropriate Legal Notices, your work need not make them do so"), keeping the
+About footer concise (Made with ❤️ Panchi146) is consistent with upstream
+practice for that interface, while complete legal terms and provenance are
+provided in LICENSE and NOTICE files distributed with the application.
+
+All supported packaging formats (Portable ZIP, Custom Installer, and NSIS)
+are configured to provide LICENSE and NOTICE files upon deployment.
+
+For binary distribution, distributors must make the complete Corresponding
+Source for that exact Oryvia build available—including all modifications,
+build/install scripts, and required assets—with equivalent access alongside the
+binary download under GPLv3 Section 6(d), or meet another applicable Section 6
+requirement. A link solely to upstream Nectar or Bloom is not Corresponding
+Source for a modified Oryvia binary. No public Oryvia source-release URL has
+been configured in this repository yet.
+
+ Assets & Technical Compatibility Notes
+ --------------------------------------
+- Oryvia identity: com.panchi146.oryvia (initial version: 1.0.0).
+- Penguin artwork (branding/oryvia-source.png and derived icons/bitmaps) was
+  supplied and selected by the user. The user has confirmed holding the rights
+  to use this artwork for Oryvia. No independent third-party artwork source, artist
+  name, or specific artwork license is asserted in this repository.
+- Upstream Bloom's Syne font (src/assets/fonts/Syne-OFL.txt) is not bundled or
+  referenced by Oryvia.
+- Internal nectar-* setting keys, IPC command names, crate library name
+  (nectar_lib), CSS variables (--nectar-*), and Windows Credential Manager
+  service identifiers ("Nectar CalDAV" / "Nectar Calendar Link") are retained
+  strictly for data/code compatibility, not product branding.

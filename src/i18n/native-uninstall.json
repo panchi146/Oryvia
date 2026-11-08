@@ -1,0 +1,12 @@
+{
+  "en": {
+    "uninstall.cleanup.scheduled": "Application file cleanup is scheduled after this window closes. Locked files keep the marker and registration for retry. Settings and other files are kept.",
+    "uninstall.cleanup.scheduleFailed": "Cleanup could not be scheduled. Registration, files and marker are retained. You can retry uninstalling:",
+    "uninstall.registration.unverified": "This installation could not be verified. Existing registrations were preserved. Details:"
+  },
+  "vi": {
+    "uninstall.cleanup.scheduled": "Đã lên lịch dọn tệp sau khi đóng cửa sổ này. Nếu tệp bị khóa, marker và đăng ký được giữ để thử lại. Cài đặt và các tệp khác được giữ nguyên.",
+    "uninstall.cleanup.scheduleFailed": "Không khởi chạy được tiến trình dọn tệp. Đăng ký, tệp và marker được giữ nguyên. Bạn có thể thử gỡ lại:",
+    "uninstall.registration.unverified": "Không xác minh được bản cài này. Các đăng ký hiện có được giữ nguyên. Chi tiết:"
+  }
+}

@@ -1,0 +1,164 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Oryvia",
+  "version": "1.0.0",
+  "identifier": "com.panchi146.oryvia",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Oryvia",
+        "width": 1920,
+        "height": 420,
+        "x": 0,
+        "y": 0,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "focus": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false,
+        "dragDropEnabled": true
+      },
+      {
+        "label": "settings",
+        "title": "Settings",
+        "url": "settings.html",
+        "width": 620,
+        "height": 480,
+        "decorations": false,
+        "transparent": true,
+        "resizable": true,
+        "maximizable": false,
+        "minimizable": true,
+        "closable": false,
+        "alwaysOnTop": false,
+        "visibleOnAllWorkspaces": false,
+        "focus": true,
+        "skipTaskbar": false,
+        "shadow": true,
+        "visible": false,
+        "center": true
+      },
+      {
+        "label": "calendar",
+        "title": "Calendar",
+        "url": "calendar.html",
+        "width": 880,
+        "height": 600,
+        "minWidth": 700,
+        "minHeight": 480,
+        "decorations": false,
+        "transparent": true,
+        "resizable": true,
+        "maximizable": false,
+        "minimizable": true,
+        "closable": false,
+        "alwaysOnTop": false,
+        "visibleOnAllWorkspaces": false,
+        "focus": true,
+        "skipTaskbar": false,
+        "shadow": true,
+        "visible": false,
+        "center": true
+      },
+      {
+        "label": "overlay",
+        "title": "Overlay",
+        "url": "overlay.html",
+        "width": 1920,
+        "height": 1080,
+        "x": 0,
+        "y": 0,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "focus": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false
+      },
+      {
+        "label": "dock",
+        "title": "Oryvia Dock",
+        "url": "dock.html",
+        "width": 1920,
+        "height": 600,
+        "x": 0,
+        "y": 480,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "focus": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost https://api.open-meteo.com https://geocoding-api.open-meteo.com https://ipapi.co http://ip-api.com"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "headerImage": "../installer/assets/header.bmp",
+        "sidebarImage": "../installer/assets/sidebar.bmp",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "installerHooks": "../installer/build/installer.nsh"
+      },
+      "allowDowngrades": false
+    },
+    "licenseFile": "../LICENSE",
+    "publisher": "Panchi146",
+    "shortDescription": "Oryvia desktop island and dock for Windows",
+    "longDescription": "Oryvia is a desktop Dynamic Island and Dock for Windows maintained by Panchi146, derived from Nectar by kua8 and contributors, and Bloom by Sehajveer Singh (GPL-3.0-only).",
+    "copyright": "Oryvia modifications by Panchi146 (2026); Nectar by kua8 and contributors; Bloom by Sehajveer Singh (GPL-3.0-only)"
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "windows": {
+        "installMode": "quiet"
+      },
+      "endpoints": [
+        "https://github.com/panchi146/Oryvia/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMzODBEQTkyODBCMUYwRjkKUldUNThMR0FrdHFBTTkvQ0lyRWJ5WW4wUVY4cWZIOXNHRUJoV2hIOGhic2ZjbENwQTlrV2M0dUcK"
+    }
+  }
+}

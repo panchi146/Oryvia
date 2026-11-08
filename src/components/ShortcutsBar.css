@@ -1,0 +1,846 @@
+.shortcuts-bar-container {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 2;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.shortcuts-divider {
+  width: 90%;
+  height: 1px;
+  margin: 2px auto 6px auto;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.12) 30%,
+    rgba(255, 255, 255, 0.12) 70%,
+    transparent 100%
+  );
+}
+
+.shortcuts-wrapper-relative {
+  position: relative;
+  width: 100%;
+}
+
+.shortcuts-scroll-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 14px 6px 14px;
+  box-sizing: border-box;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.shortcuts-scroll-area::-webkit-scrollbar {
+  display: none;
+}
+
+/* Individual Shortcut Card */
+.shortcut-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  min-width: 56px;
+  height: 58px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  position: relative;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  box-sizing: border-box;
+  padding: 4px 3px 3px 3px;
+}
+
+.shortcut-card:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1.5px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.shortcut-card:active {
+  transform: scale(0.96) translateY(0);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.shortcut-icon-wrapper {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 3px;
+  position: relative;
+}
+
+.shortcut-icon-img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+}
+
+.shortcut-fallback-icon {
+  stroke-width: 1.8;
+}
+
+.shortcut-fallback-icon.folder {
+  color: #fbbf24;
+}
+
+.shortcut-fallback-icon.app {
+  color: #93c5fd;
+}
+
+.shortcut-label {
+  font-size: 10px;
+  line-height: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+  max-width: 50px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+  letter-spacing: -0.2px;
+}
+
+/* Delete Button */
+.shortcut-delete-btn {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: rgba(30, 30, 30, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.8);
+  transition: all 0.15s ease;
+  z-index: 5;
+}
+
+.shortcut-card:hover .shortcut-delete-btn {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+
+.shortcut-delete-btn:hover {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #ffffff;
+  transform: scale(1.1);
+}
+
+/* Add Button */
+.shortcut-add-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.shortcut-add-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  min-width: 56px;
+  height: 58px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  box-sizing: border-box;
+  padding: 4px 3px 3px 3px;
+  outline: none;
+}
+
+.shortcut-add-btn:hover,
+.shortcut-add-btn.active {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.45);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.shortcut-add-label {
+  font-size: 10px;
+  line-height: 12px;
+  font-weight: 500;
+  margin-top: 3px;
+}
+
+/* Add Popover: nằm trọn trong khoảng 58px của hàng shortcuts, không đổi chiều cao Island */
+.shortcuts-add-popover {
+  position: absolute;
+  right: 12px;
+  top: 0;
+  height: 58px;
+  min-width: 142px;
+  background: rgba(20, 20, 26, 0.97);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  padding: 3px 6px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
+  animation: shortcutsPopoverIn 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 25;
+  box-sizing: border-box;
+}
+
+@keyframes shortcutsPopoverIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.shortcuts-add-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 2px 4px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  line-height: 1;
+}
+
+.shortcuts-popover-close-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+}
+
+.shortcuts-popover-close-btn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.shortcuts-add-popover-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shortcuts-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.shortcuts-menu-item:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+/* Empty State Drag & Drop Onboarding (Vertical Centered Redesign) */
+.shortcuts-scroll-area.is-empty {
+  padding: 0 14px 4px 14px;
+  overflow: hidden;
+  justify-content: center;
+}
+
+.shortcuts-empty-container {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.shortcuts-header-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+  text-align: center;
+  margin-bottom: 7px;
+  line-height: 1;
+}
+
+.shortcuts-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  gap: 6px;
+}
+
+.shortcuts-empty-card:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.shortcuts-empty-card.is-drop-active {
+  background: rgba(37, 99, 235, 0.22);
+  border-color: rgba(96, 165, 250, 0.85);
+  border-style: dashed;
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.25);
+}
+
+.shortcuts-empty-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(96, 165, 250, 0.1);
+  border: 1px solid rgba(96, 165, 250, 0.2);
+  color: #60a5fa;
+  margin-bottom: 2px;
+  transition: all 0.2s ease;
+}
+
+.shortcuts-empty-icon-wrapper.active {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: rgba(147, 197, 253, 0.6);
+  color: #93c5fd;
+  transform: scale(1.06);
+}
+
+.shortcuts-empty-icon {
+  color: inherit;
+}
+
+.active-bounce {
+  animation: shortcuts-bounce 0.9s infinite alternate cubic-bezier(0.45, 0, 0.55, 1);
+}
+
+@keyframes shortcuts-bounce {
+  0% { transform: translateY(-2px); }
+  100% { transform: translateY(3px); }
+}
+
+.shortcuts-empty-text-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 2px;
+  width: 100%;
+}
+
+.shortcuts-empty-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+  letter-spacing: -0.2px;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+}
+
+.shortcuts-empty-subtitle {
+  font-size: 11px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.48);
+  letter-spacing: -0.1px;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+}
+
+.shortcuts-empty-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 6px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.shortcuts-empty-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+}
+
+.shortcuts-empty-action-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.shortcuts-empty-action-btn:active {
+  transform: translateY(0) scale(0.98);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.shortcuts-empty-drop-active {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 0;
+}
+
+.shortcuts-empty-drop-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #93c5fd;
+  letter-spacing: -0.2px;
+  text-align: center;
+}
+
+/* Error Toast: nằm hoàn toàn trong Shortcuts Bar, không trồi lên status widgets */
+.shortcuts-error-toast {
+  position: absolute;
+  top: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(220, 38, 38, 0.22);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  color: #fecaca;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 6px 3px 10px;
+  border-radius: 9999px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+  max-width: 92%;
+  z-index: 45;
+  cursor: pointer;
+  animation: shortcutsToastIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-sizing: border-box;
+}
+
+.shortcuts-error-toast-icon {
+  color: #f87171;
+  flex-shrink: 0;
+}
+
+.shortcuts-error-toast-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.shortcuts-error-toast-close {
+  background: transparent;
+  border: none;
+  color: rgba(254, 202, 202, 0.7);
+  cursor: pointer;
+  padding: 2px;
+  margin-left: 2px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+  flex-shrink: 0;
+}
+
+.shortcuts-error-toast-close:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+@keyframes shortcutsToastIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* Drop Zone Overlay */
+.shortcuts-drop-zone-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  margin: 0 10px;
+  background: rgba(37, 99, 235, 0.25);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 2px dashed rgba(96, 165, 250, 0.85);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  animation: dropZonePulse 1.2s infinite alternate ease-in-out;
+}
+
+@keyframes dropZonePulse {
+  0% {
+    background: rgba(37, 99, 235, 0.2);
+    border-color: rgba(96, 165, 250, 0.6);
+  }
+  100% {
+    background: rgba(37, 99, 235, 0.35);
+    border-color: rgba(147, 197, 253, 1);
+  }
+}
+
+.shortcuts-drop-zone-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ffffff;
+  pointer-events: none;
+}
+
+.shortcuts-drop-icon {
+  color: #93c5fd;
+  animation: bounceDown 0.8s infinite alternate ease-in-out;
+}
+
+@keyframes bounceDown {
+  0% {
+    transform: translateY(-2px);
+  }
+  100% {
+    transform: translateY(2px);
+  }
+}
+
+.shortcuts-drop-text {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* Light Mode Overrides for Shortcuts Bar */
+.light-mode .shortcuts-divider {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.08) 30%,
+    rgba(0, 0, 0, 0.08) 70%,
+    transparent 100%
+  );
+}
+
+.light-mode .shortcut-card {
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+.light-mode .shortcut-card:hover {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(0, 0, 0, 0.12);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
+}
+
+.light-mode .shortcut-card:active {
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.light-mode .shortcut-label {
+  color: #1a1a1c;
+}
+
+.light-mode .shortcut-delete-btn {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  color: rgba(26, 26, 28, 0.7);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.light-mode .shortcut-delete-btn:hover {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #ffffff;
+}
+
+.light-mode .shortcut-add-btn {
+  background: rgba(255, 255, 255, 0.45);
+  border: 1px dashed rgba(0, 0, 0, 0.16);
+  color: rgba(26, 26, 28, 0.65);
+}
+
+.light-mode .shortcut-add-btn:hover,
+.light-mode .shortcut-add-btn.active {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(0, 0, 0, 0.28);
+  color: #1a1a1c;
+}
+
+.light-mode .shortcuts-add-popover {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), inset 0 0 0 0.5px rgba(255, 255, 255, 0.9);
+}
+
+.light-mode .shortcuts-add-popover-header {
+  color: rgba(26, 26, 28, 0.5);
+}
+
+.light-mode .shortcuts-popover-close-btn {
+  color: rgba(26, 26, 28, 0.5);
+}
+
+.light-mode .shortcuts-popover-close-btn:hover {
+  color: #1a1a1c;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.light-mode .shortcuts-menu-item {
+  color: #1a1a1c;
+}
+
+.light-mode .shortcuts-menu-item:hover {
+  background: rgba(0, 122, 255, 0.08);
+}
+
+.light-mode .shortcuts-error-toast {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #b91c1c;
+  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.12);
+}
+
+.light-mode .shortcuts-error-toast-icon {
+  color: #dc2626;
+}
+
+.light-mode .shortcuts-error-toast-close {
+  color: rgba(185, 28, 28, 0.7);
+}
+
+.light-mode .shortcuts-error-toast-close:hover {
+  color: #7f1d1d;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.light-mode .shortcuts-header-label {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.light-mode .shortcuts-empty-card {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.14);
+}
+
+.light-mode .shortcuts-empty-card:hover {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.22);
+}
+
+.light-mode .shortcuts-empty-card.is-drop-active {
+  background: rgba(37, 99, 235, 0.1);
+  border-color: rgba(37, 99, 235, 0.6);
+}
+
+.light-mode .shortcuts-empty-icon-wrapper {
+  background: rgba(37, 99, 235, 0.08);
+  border-color: rgba(37, 99, 235, 0.15);
+  color: #2563eb;
+}
+
+.light-mode .shortcuts-empty-icon-wrapper.active {
+  background: rgba(37, 99, 235, 0.18);
+  border-color: rgba(37, 99, 235, 0.4);
+  color: #1d4ed8;
+}
+
+.light-mode .shortcuts-empty-title {
+  color: #1a1a1c;
+}
+
+.light-mode .shortcuts-empty-subtitle {
+  color: rgba(26, 26, 28, 0.55);
+}
+
+.light-mode .shortcuts-empty-drop-title {
+  color: #1d4ed8;
+}
+
+.light-mode .shortcuts-empty-action-btn {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #1a1a1c;
+}
+
+.light-mode .shortcuts-empty-action-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.18);
+  color: #000000;
+}
+
+/* DEV ONLY: Diagnostic Pin Button */
+.shortcut-dev-pin-wrapper {
+  display: flex;
+  align-items: center;
+  margin-left: 2px;
+}
+
+.shortcut-dev-pin-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.65);
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.shortcut-dev-pin-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.shortcut-dev-pin-btn.is-pinned {
+  background: rgba(14, 165, 233, 0.22);
+  border: 1px solid rgba(56, 189, 248, 0.7);
+  color: #38bdf8;
+  box-shadow: 0 0 8px rgba(14, 165, 233, 0.3);
+}
+
+.shortcut-dev-pin-text {
+  font-size: 9px;
+  letter-spacing: 0.5px;
+}
+
+.shortcut-dev-testwin-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  color: #38bdf8;
+  padding: 4px 6px;
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  white-space: nowrap;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-left: 4px;
+}
+
+.shortcut-dev-testwin-btn:hover {
+  background: rgba(14, 165, 233, 0.2);
+  color: #ffffff;
+  border-color: rgba(56, 189, 248, 0.5);
+}
+
+.shortcut-dev-unmask-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  color: #a1a1aa;
+  padding: 4px 6px;
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  white-space: nowrap;
+  margin-left: 4px;
+}
+
+.shortcut-dev-unmask-btn.active {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.6);
+}
+
+.shortcut-dev-unmask-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}

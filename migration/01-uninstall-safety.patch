@@ -1,0 +1,673 @@
+diff --git a/install_safety.rs b/install_safety.rs
+new file mode 100644
+index 0000000..49ec9f0
+--- /dev/null
++++ b/install_safety.rs
+@@ -0,0 +1,198 @@
++//! Conservative adaptation of Nectar 1.9.1 remove_app_files_command.
++//! A folder name is never proof of ownership. Never recursively remove it.
++use std::path::Path;
++
++pub const APP_FILES: &[&str] = &["nectar.exe", "uninstall.exe", ".install-scope"];
++
++pub fn owned_size_kb(dir: &Path) -> u32 {
++    let total = APP_FILES.iter().filter_map(|name| std::fs::symlink_metadata(dir.join(name)).ok())
++        .filter(|meta| meta.is_file() && !meta.file_type().is_symlink())
++        .fold(0u64, |sum, meta| sum.saturating_add(meta.len()));
++    (total / 1024).min(u32::MAX as u64) as u32
++}
++
++pub fn scope(dir: &Path) -> Option<bool> {
++    match std::fs::read_to_string(dir.join(".install-scope")).ok()?.trim() {
++        "user" => Some(false),
++        "all-users" => Some(true),
++        _ => None,
++    }
++}
++
++pub fn validate_dir(dir: &Path) -> Result<(), String> {
++    if !dir.is_absolute() || dir.parent().is_none() {
++        return Err("An absolute, non-root install directory is required".into());
++    }
++    for ancestor in dir.ancestors() {
++        if let Ok(meta) = std::fs::symlink_metadata(ancestor) {
++            #[cfg(windows)]
++            {
++                use std::os::windows::fs::MetadataExt;
++                if meta.file_attributes() & 0x400 != 0 {
++                    return Err("Install paths through reparse points are not supported".into());
++                }
++            }
++            if meta.file_type().is_symlink() {
++                return Err("Install paths through links are not supported".into());
++            }
++        }
++    }
++    Ok(())
++}
++
++#[allow(dead_code)] // Only the custom installer calls this shared validation.
++pub fn validate_install(dir: &Path, all_users: bool) -> Result<(), String> {
++    validate_dir(dir)?;
++    if let Some(existing_scope) = scope(dir) {
++        if existing_scope != all_users {
++            return Err("Uninstall the existing installation before changing its scope".into());
++        }
++    } else if APP_FILES.iter().any(|name| dir.join(name).exists()) {
++        return Err("The selected directory contains conflicting files without an install marker".into());
++    }
++    for name in APP_FILES {
++        if let Ok(meta) = std::fs::symlink_metadata(dir.join(name)) {
++            if !meta.is_file() || meta.file_type().is_symlink() {
++                return Err("An application file conflicts with a directory or link".into());
++            }
++            #[cfg(windows)]
++            {
++                use std::os::windows::fs::MetadataExt;
++                if meta.file_attributes() & 0x400 != 0 {
++                    return Err("An application file is a reparse point".into());
++                }
++            }
++        }
++    }
++    Ok(())
++}
++
++fn ps_literal(value: &str) -> String {
++    format!("'{}'", value.replace('\'', "''"))
++}
++
++#[cfg(windows)]
++pub fn stop_installed_app(dir: &Path) -> Result<(), String> {
++    use std::os::windows::process::CommandExt;
++    let exe = ps_literal(&dir.join(APP_FILES[0]).to_string_lossy());
++    let pid = std::process::id();
++    let script = format!("$ErrorActionPreference = 'Stop'; try {{ \
++        Get-CimInstance Win32_Process -Filter \"Name = 'nectar.exe'\" | \
++        Where-Object {{ $_.ExecutablePath -eq {exe} -and $_.ProcessId -ne {pid} }} | \
++        ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop }} \
++        }} catch {{ exit 1 }}");
++    let status = std::process::Command::new("powershell.exe")
++        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &script])
++        .creation_flags(0x0800_0000).status().map_err(|e| e.to_string())?;
++    if status.success() { Ok(()) } else { Err("Unable to stop the installed application".into()) }
++}
++
++#[cfg(windows)]
++pub fn remove_owned_shortcut(shortcut: &Path, dir: &Path) {
++    use std::os::windows::process::CommandExt;
++    let shortcut = ps_literal(&shortcut.to_string_lossy());
++    let exe = ps_literal(&dir.join(APP_FILES[0]).to_string_lossy());
++    let script = format!("$p = {shortcut}; if (Test-Path -LiteralPath $p -PathType Leaf) {{ \
++        $shell = New-Object -ComObject WScript.Shell; \
++        if ($shell.CreateShortcut($p).TargetPath -eq {exe}) {{ Remove-Item -LiteralPath $p -Force }} \
++        }}");
++    let _ = std::process::Command::new("powershell.exe")
++        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &script])
++        .creation_flags(0x0800_0000).status();
++}
++
++#[cfg(windows)]
++pub fn remove_taskbar_shortcuts(dir: &Path) {
++    let Some(appdata) = std::env::var_os("APPDATA") else { return };
++    let pinned = std::path::PathBuf::from(appdata)
++        .join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar");
++    let Ok(entries) = std::fs::read_dir(pinned) else { return };
++    for entry in entries.flatten() {
++        let path = entry.path();
++        if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("lnk")) {
++            remove_owned_shortcut(&path, dir);
++        }
++    }
++}
++
++pub fn remove_app_files_command(dir: &Path, pid: u32) -> Result<String, String> {
++    validate_dir(dir)?;
++    if scope(dir).is_none() {
++        return Err("Uninstall refused: missing or invalid install scope marker".into());
++    }
++    let files = APP_FILES.iter().map(|name| ps_literal(&dir.join(name).to_string_lossy()))
++        .collect::<Vec<_>>().join(", ");
++    // Literal paths throughout; no cmd.exe / RunOnce string or interpolated log path.
++    // Leave the folder (including unknown files and settings) intact, even if empty.
++    Ok(format!(
++        "Wait-Process -Id {pid} -ErrorAction SilentlyContinue; \
++         $files = @({files}); \
++         for ($i = 0; $i -lt 40; $i++) {{ \
++           $left = @($files | Where-Object {{ Test-Path -LiteralPath $_ }}); \
++           if ($left.Count -eq 0) {{ break }}; \
++           foreach ($file in $left) {{ \
++             $item = Get-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue; \
++             if ($item -and !$item.PSIsContainer -and !($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {{ \
++               Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue \
++             }} \
++           }}; Start-Sleep -Milliseconds 500 \
++         }}; \
++         $left = @($files | Where-Object {{ Test-Path -LiteralPath $_ }}); \
++         if ($left.Count) {{ $left | Add-Content -LiteralPath (Join-Path $env:TEMP 'nectar-uninstall-pending.log') }}"
++    ))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    fn fixture() -> std::path::PathBuf {
++        let dir = std::env::temp_dir().join(format!("install-safety-{}-{:?}", std::process::id(), std::thread::current().id()));
++        std::fs::create_dir_all(&dir).unwrap();
++        dir
++    }
++    #[test]
++    fn invalid_scope_is_not_per_user() {
++        let dir = fixture();
++        std::fs::write(dir.join(".install-scope"), "unexpected").unwrap();
++        assert_eq!(scope(&dir), None);
++        assert!(remove_app_files_command(&dir, 1).is_err());
++        std::fs::remove_file(dir.join(".install-scope")).unwrap();
++        std::fs::remove_dir(dir).unwrap();
++    }
++    #[test]
++    fn only_owned_literal_files_no_recursive_or_shell_fallback() {
++        let dir = fixture();
++        std::fs::write(dir.join(".install-scope"), "user").unwrap();
++        let command = remove_app_files_command(&dir, 123).unwrap();
++        assert!(command.contains("-LiteralPath"));
++        assert!(!command.contains("-Recurse"));
++        assert!(!command.contains("cmd /c"));
++        assert!(!command.contains("RunOnce"));
++        assert!(command.contains("PSIsContainer"));
++        assert!(command.contains("ReparsePoint"));
++        assert_eq!(ps_literal("a'&$()[]"), "'a''&$()[]'");
++        assert!(validate_install(&dir, true).is_err());
++        std::fs::remove_file(dir.join(".install-scope")).unwrap();
++        std::fs::remove_dir(dir).unwrap();
++    }
++
++    #[test]
++    #[cfg(windows)]
++    fn executes_cleanup_in_sandbox_preserving_unrelated_files_and_settings() {
++        use std::os::windows::process::CommandExt;
++        let base = fixture();
++        let dir = base.join("Nectar shared '& $() [test]");
++        std::fs::create_dir(&dir).unwrap();
++        for name in APP_FILES { std::fs::write(dir.join(name), if *name == ".install-scope" { "user" } else { "fixture" }).unwrap(); }
++        for name in ["another-app.exe", "settings.json"] { std::fs::write(dir.join(name), "keep").unwrap(); }
++        let script = remove_app_files_command(&dir, 0).unwrap();
++        let result = std::process::Command::new("powershell.exe")
++            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
++            .creation_flags(0x0800_0000).output().unwrap();
++        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
++        for name in APP_FILES { assert!(!dir.join(name).exists(), "{name}"); }
++        for name in ["another-app.exe", "settings.json"] { assert_eq!(std::fs::read_to_string(dir.join(name)).unwrap(), "keep"); std::fs::remove_file(dir.join(name)).unwrap(); }
++        std::fs::remove_dir(dir).unwrap();
++        std::fs::remove_dir(base).unwrap();
++    }
++}
+diff --git a/installer-app/src-tauri/build.rs b/installer-app/src-tauri/build.rs
+index af2d61e..b06f785 100644
+--- a/installer-app/src-tauri/build.rs
++++ b/installer-app/src-tauri/build.rs
+@@ -2,6 +2,12 @@ use std::path::Path;
+ 
+ fn main() {
+     let payload = Path::new("payload.zip");
++    println!("cargo:rerun-if-changed=payload.zip");
++    if std::env::var("PROFILE").as_deref() == Ok("release")
++        && std::fs::metadata(payload).map_or(true, |meta| meta.len() == 0)
++    {
++        panic!("Release installer requires a real payload.zip; run the payload build step first");
++    }
+     if !payload.exists() {
+         println!("cargo:warning=payload.zip is a placeholder — run scripts/build-payload step before shipping this installer");
+         std::fs::write(payload, []).expect("failed to write placeholder payload.zip");
+diff --git a/installer-app/src-tauri/src/commands.rs b/installer-app/src-tauri/src/commands.rs
+index 231e4ee..2ee6463 100644
+--- a/installer-app/src-tauri/src/commands.rs
++++ b/installer-app/src-tauri/src/commands.rs
+@@ -81,18 +81,6 @@ struct ProgressEvent {
+     message: String,
+ }
+ 
+-fn dir_size_kb(dir: &std::path::Path) -> u32 {
+-    let mut total: u64 = 0;
+-    if let Ok(entries) = std::fs::read_dir(dir) {
+-        for entry in entries.flatten() {
+-            if let Ok(meta) = entry.metadata() {
+-                total += meta.len();
+-            }
+-        }
+-    }
+-    (total / 1024) as u32
+-}
+-
+ #[tauri::command]
+ pub async fn start_install(
+     app: tauri::AppHandle,
+@@ -108,6 +96,7 @@ pub async fn start_install(
+     }
+ 
+     let install_path = std::path::PathBuf::from(&install_dir);
++    crate::install_safety::validate_install(&install_path, all_users)?;
+ 
+     let app_extract = app.clone();
+     let install_path_extract = install_path.clone();
+@@ -147,14 +136,14 @@ pub async fn start_install(
+     );
+ 
+     let self_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+-    let _ = std::fs::copy(&self_exe, &uninstall_exe);
++    std::fs::copy(&self_exe, &uninstall_exe).map_err(|e| format!("Cannot install uninstaller: {e}"))?;
+ 
+-    let _ = std::fs::write(
++    std::fs::write(
+         install_path.join(".install-scope"),
+         if all_users { "all-users" } else { "user" },
+-    );
++    ).map_err(|e| format!("Cannot write install scope: {e}"))?;
+ 
+-    let size_kb = dir_size_kb(&install_path);
++    let size_kb = crate::install_safety::owned_size_kb(&install_path);
+     let uninstall_string = format!("\"{}\" --uninstall", uninstall_exe.to_string_lossy());
+     let install_location = install_path.to_string_lossy().to_string();
+     let icon_str = format!("{},0", exe_path.to_string_lossy());
+@@ -220,21 +209,13 @@ pub fn open_url(url: String) -> Result<(), String> {
+     Ok(())
+ }
+ 
+-fn install_is_all_users(install_dir: &std::path::Path) -> bool {
+-    if let Ok(scope) = std::fs::read_to_string(install_dir.join(".install-scope")) {
+-        return scope.trim() == "all-users";
+-    }
+-    crate::known_folders::program_files_dir().is_some_and(|pf| {
+-        install_dir.to_string_lossy().to_lowercase().starts_with(&pf.to_string_lossy().to_lowercase())
+-    })
+-}
+-
+ #[tauri::command]
+ pub async fn start_uninstall(app: tauri::AppHandle) -> Result<(), String> {
+     let self_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+     let install_dir = self_exe.parent().ok_or("no parent dir")?.to_path_buf();
+ 
+-    let all_users_install = install_is_all_users(&install_dir);
++    let all_users_install = crate::install_safety::scope(&install_dir)
++        .ok_or("Uninstall refused: missing or invalid install marker")?;
+     if all_users_install && !crate::elevate::is_elevated() {
+         crate::elevate::relaunch_elevated(&["--uninstall".to_string(), "--auto-uninstall".to_string()])
+             .map_err(|_| "Uninstalling an all-users install needs administrator permission.".to_string())?;
+@@ -248,7 +229,7 @@ pub async fn start_uninstall(app: tauri::AppHandle) -> Result<(), String> {
+     );
+ 
+     let mut shortcuts = Vec::new();
+-    for all_users in [false, true] {
++    for all_users in [all_users_install] {
+         if let Some(dir) = crate::known_folders::start_menu_programs_dir(all_users) {
+             shortcuts.push(dir.join("Nectar.lnk"));
+         }
+diff --git a/installer-app/src-tauri/src/main.rs b/installer-app/src-tauri/src/main.rs
+index f305eee..aeca2fe 100644
+--- a/installer-app/src-tauri/src/main.rs
++++ b/installer-app/src-tauri/src/main.rs
+@@ -8,6 +8,8 @@ mod registry;
+ mod shortcuts;
+ mod state;
+ mod uninstall;
++#[path = "../../../install_safety.rs"]
++mod install_safety;
+ 
+ use tauri::Manager;
+ 
+diff --git a/installer-app/src-tauri/src/payload.rs b/installer-app/src-tauri/src/payload.rs
+index 84221e5..02deaa4 100644
+--- a/installer-app/src-tauri/src/payload.rs
++++ b/installer-app/src-tauri/src/payload.rs
+@@ -10,6 +10,14 @@ pub fn payload_present() -> bool {
+ pub fn extract<F: FnMut(f32, &str)>(dest: &Path, mut on_progress: F) -> Result<(), String> {
+     let reader = Cursor::new(PAYLOAD);
+     let mut archive = zip::ZipArchive::new(reader).map_err(|e| e.to_string())?;
++    if archive.len() != 1 { return Err("Payload must contain exactly the application executable".into()); }
++    {
++        let entry = archive.by_index(0).map_err(|e| e.to_string())?;
++        if entry.name() != "nectar.exe" || entry.is_dir() || entry.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000) {
++            return Err("Unexpected payload entry".into());
++        }
++    }
++    crate::install_safety::validate_dir(dest)?;
+     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+ 
+     let total = archive.len().max(1);
+diff --git a/installer-app/src-tauri/src/registry.rs b/installer-app/src-tauri/src/registry.rs
+index fbc53c3..f78c323 100644
+--- a/installer-app/src-tauri/src/registry.rs
++++ b/installer-app/src-tauri/src/registry.rs
+@@ -1,5 +1,5 @@
+ use windows::Win32::System::Registry::{
+-    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
++    RegDeleteKeyValueW, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
+     HKEY_LOCAL_MACHINE, KEY_WRITE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
+ };
+ use windows::core::PCWSTR;
+@@ -47,6 +47,7 @@ pub fn write_uninstall_entry(all_users: bool, info: &UninstallInfo) -> windows::
+         set_string(hkey, "UninstallString", info.uninstall_string)?;
+         set_dword(hkey, "NoModify", 1)?;
+         set_dword(hkey, "NoRepair", 1)?;
++        set_dword(hkey, "CurrentUser", u32::from(!all_users))?;
+         set_dword(hkey, "EstimatedSize", info.estimated_size_kb)?;
+ 
+         RegCloseKey(hkey).ok()?;
+@@ -73,6 +74,11 @@ pub fn remove_uninstall_entry(all_users: bool) -> windows::core::Result<()> {
+         let subkey_w = wide(UNINSTALL_SUBKEY);
+         let install_key = wide(r"Software\kua8\nectar");
+         let _ = RegDeleteTreeW(root, PCWSTR(install_key.as_ptr()));
++        let run_key = wide(r"Software\Microsoft\Windows\CurrentVersion\Run");
++        let approved_key = wide(r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run");
++        let value = wide("nectar");
++        let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(run_key.as_ptr()), PCWSTR(value.as_ptr()));
++        let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(approved_key.as_ptr()), PCWSTR(value.as_ptr()));
+         RegDeleteTreeW(root, PCWSTR(subkey_w.as_ptr())).ok()
+     }
+ }
+diff --git a/installer-app/src-tauri/src/uninstall.rs b/installer-app/src-tauri/src/uninstall.rs
+index d6dcf85..55dfc8b 100644
+--- a/installer-app/src-tauri/src/uninstall.rs
++++ b/installer-app/src-tauri/src/uninstall.rs
+@@ -4,73 +4,23 @@ use std::path::{Path, PathBuf};
+ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+ const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+ 
+-fn nectar_running() -> bool {
+-    std::process::Command::new("tasklist")
+-        .args(["/FI", "IMAGENAME eq nectar.exe"])
+-        .creation_flags(CREATE_NO_WINDOW)
+-        .output()
+-        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("nectar.exe"))
+-}
++pub fn uninstall(install_dir: &Path, all_users: bool, shortcuts: &[PathBuf]) -> Result<(), String> {
++    let ps_command = crate::install_safety::remove_app_files_command(install_dir, std::process::id())?;
+ 
+-fn stop_running_nectar() {
+-    let _ = std::process::Command::new("taskkill")
+-        .args(["/IM", "nectar.exe"])
++    crate::install_safety::stop_installed_app(install_dir)?;
++    let app_exe = install_dir.join(crate::install_safety::APP_FILES[0]);
++    std::process::Command::new(&app_exe)
++        .arg("--restore-taskbar-on-uninstall")
+         .creation_flags(CREATE_NO_WINDOW)
+-        .output();
+-
+-    for _ in 0..12 {
+-        if !nectar_running() {
+-            return;
+-        }
+-        std::thread::sleep(std::time::Duration::from_millis(250));
+-    }
+-
+-    let _ = std::process::Command::new("taskkill")
+-        .args(["/F", "/T", "/IM", "nectar.exe"])
+-        .creation_flags(CREATE_NO_WINDOW)
+-        .output();
+-    for _ in 0..12 {
+-        if !nectar_running() {
+-            return;
+-        }
+-        std::thread::sleep(std::time::Duration::from_millis(250));
+-    }
+-}
+-
+-fn run_once_key(all_users: bool) -> &'static str {
+-    if all_users {
+-        r"HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce"
+-    } else {
+-        r"HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce"
+-    }
+-}
+-
+-pub fn uninstall(install_dir: &Path, all_users: bool, shortcuts: &[PathBuf]) -> Result<(), String> {
+-    stop_running_nectar();
++        .status().map_err(|e| format!("Could not restore taskbar: {e}"))?;
+ 
+     for s in shortcuts {
+-        let _ = std::fs::remove_file(s);
++        crate::install_safety::remove_owned_shortcut(s, install_dir);
+     }
++    crate::install_safety::remove_taskbar_shortcuts(install_dir);
+ 
+     let _ = crate::registry::remove_uninstall_entry(all_users);
+ 
+-    let pid = std::process::id();
+-    let dir_str = install_dir.to_string_lossy().replace('\'', "''");
+-    let ps_command = format!(
+-        "Wait-Process -Id {pid} -ErrorAction SilentlyContinue; \
+-         for ($i = 0; $i -lt 40 -and (Test-Path -LiteralPath '{dir}'); $i++) {{ \
+-           Remove-Item -LiteralPath '{dir}' -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable failed; \
+-           if (Test-Path -LiteralPath '{dir}') {{ Start-Sleep -Milliseconds 500 }} \
+-         }}; \
+-         if (Test-Path -LiteralPath '{dir}') {{ \
+-           Add-Content (Join-Path $env:TEMP 'nectar-uninstall.log') (\"Could not remove {dir}: \" + ($failed | Out-String)); \
+-           New-ItemProperty -Path '{run_once}' -Name 'NectarCleanup' -Value 'cmd /c rd /s /q \"{dir}\"' -Force -ErrorAction SilentlyContinue | Out-Null \
+-         }}",
+-        pid = pid,
+-        dir = dir_str,
+-        run_once = run_once_key(all_users)
+-    );
+-
+     let spawn = |flags: u32| {
+         std::process::Command::new("powershell")
+             .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps_command])
+diff --git a/src-tauri/src/main.rs b/src-tauri/src/main.rs
+index 1801db1..1945a1d 100644
+--- a/src-tauri/src/main.rs
++++ b/src-tauri/src/main.rs
+@@ -9,6 +9,8 @@ mod monitors;
+ mod updater;
+ mod uninstall_registry;
+ mod native_uninstall;
++#[path = "../../install_safety.rs"]
++mod install_safety;
+ mod diagnostics;
+ mod taskbar_pins;
+ mod tray_icons;
+@@ -39,6 +41,10 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
+ }
+ 
+ fn main() {
++    if std::env::args().any(|arg| arg == "--restore-taskbar-on-uninstall") {
++        native_uninstall::restore_taskbar_if_left_hidden();
++        return;
++    }
+     if native_uninstall::requested() {
+         native_uninstall::run();
+         return;
+diff --git a/src-tauri/src/native_uninstall.rs b/src-tauri/src/native_uninstall.rs
+index 3e6595c..e4b27b2 100644
+--- a/src-tauri/src/native_uninstall.rs
++++ b/src-tauri/src/native_uninstall.rs
+@@ -67,39 +67,7 @@ fn relaunch_elevated(exe: &Path) -> bool {
+     (result.0 as isize) > 32
+ }
+ 
+-fn run_hidden(program: &str, args: &[&str]) -> Option<String> {
+-    std::process::Command::new(program)
+-        .args(args)
+-        .creation_flags(CREATE_NO_WINDOW)
+-        .output()
+-        .ok()
+-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+-}
+-
+-fn stop_running_nectar() {
+-    let not_self = format!("PID ne {}", std::process::id());
+-    let filters = ["/FI", "IMAGENAME eq nectar.exe", "/FI", not_self.as_str()];
+-
+-    let still_running = || {
+-        run_hidden("tasklist", &filters).is_some_and(|out| out.to_lowercase().contains("nectar.exe"))
+-    };
+-
+-    let _ = run_hidden("taskkill", &filters);
+-    for _ in 0..16 {
+-        if !still_running() { return; }
+-        std::thread::sleep(std::time::Duration::from_millis(250));
+-    }
+-
+-    let mut forced = vec!["/F"];
+-    forced.extend_from_slice(&filters);
+-    let _ = run_hidden("taskkill", &forced);
+-    for _ in 0..8 {
+-        if !still_running() { return; }
+-        std::thread::sleep(std::time::Duration::from_millis(250));
+-    }
+-}
+-
+-fn restore_taskbar_if_left_hidden() {
++pub fn restore_taskbar_if_left_hidden() {
+     let Ok(appdata) = std::env::var("APPDATA") else { return };
+     let flag: PathBuf = Path::new(&appdata).join("com.kua8.nectar").join("taskbar_hidden.flag");
+     if flag.exists() {
+@@ -108,13 +76,13 @@ fn restore_taskbar_if_left_hidden() {
+     }
+ }
+ 
+-fn remove_shortcuts(all_users: bool) {
++fn remove_shortcuts(all_users: bool, install_dir: &Path) {
+     let mut lnks = Vec::new();
+     if let Some(d) = start_menu_programs_dir(all_users) { lnks.push(d.join("Nectar.lnk")); }
+     if let Some(d) = legacy_start_menu_dir(all_users) { lnks.push(d.join("Nectar.lnk")); }
+     if let Some(d) = desktop_dir(all_users) { lnks.push(d.join("Nectar.lnk")); }
+     for lnk in lnks {
+-        let _ = std::fs::remove_file(lnk);
++        crate::install_safety::remove_owned_shortcut(&lnk, install_dir);
+     }
+ }
+ 
+@@ -138,7 +106,10 @@ pub fn run() {
+     let Ok(exe) = std::env::current_exe() else { return };
+     let Some(install_dir) = exe.parent().map(Path::to_path_buf) else { return };
+ 
+-    let all_users = crate::uninstall_registry::install_scope(&install_dir).unwrap_or(false);
++    let Some(all_users) = crate::install_safety::scope(&install_dir) else {
++        message("Uninstall refused: missing or invalid install marker.", MB_OK | MB_ICONINFORMATION);
++        return;
++    };
+ 
+     if all_users && !is_elevated() {
+         if !relaunch_elevated(&exe) {
+@@ -155,30 +126,19 @@ pub fn run() {
+         return;
+     }
+ 
+-    stop_running_nectar();
++    let ps_command = match crate::install_safety::remove_app_files_command(&install_dir, std::process::id()) {
++        Ok(command) => command,
++        Err(error) => { message(&error, MB_OK | MB_ICONINFORMATION); return; }
++    };
++
++    if let Err(error) = crate::install_safety::stop_installed_app(&install_dir) {
++        message(&error, MB_OK | MB_ICONINFORMATION); return;
++    }
+     restore_taskbar_if_left_hidden();
+-    remove_shortcuts(all_users);
++    remove_shortcuts(all_users, &install_dir);
++    crate::install_safety::remove_taskbar_shortcuts(&install_dir);
+     remove_registry(all_users);
+ 
+-    let dir_str = install_dir.to_string_lossy().replace('\'', "''");
+-    let ps_command = format!(
+-        "Wait-Process -Id {pid} -ErrorAction SilentlyContinue; \
+-         for ($i = 0; $i -lt 40 -and (Test-Path -LiteralPath '{dir}'); $i++) {{ \
+-           Remove-Item -LiteralPath '{dir}' -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable failed; \
+-           if (Test-Path -LiteralPath '{dir}') {{ Start-Sleep -Milliseconds 500 }} \
+-         }}; \
+-         if (Test-Path -LiteralPath '{dir}') {{ \
+-           Add-Content (Join-Path $env:TEMP 'nectar-uninstall.log') (\"Could not remove {dir}: \" + ($failed | Out-String)); \
+-           New-ItemProperty -Path '{run_once}' -Name 'NectarCleanup' -Value 'cmd /c rd /s /q \"{dir}\"' -Force -ErrorAction SilentlyContinue | Out-Null \
+-         }}",
+-        pid = std::process::id(),
+-        dir = dir_str,
+-        run_once = if all_users {
+-            r"HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce"
+-        } else {
+-            r"HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce"
+-        }
+-    );
+     let spawn = |flags: u32| {
+         std::process::Command::new("powershell")
+             .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps_command])
+@@ -190,10 +150,10 @@ pub fn run() {
+ 
+     if spawned.is_err() {
+         message(
+-            &format!("Nectar was unregistered, but its folder couldn't be removed automatically. You can delete it yourself:\n\n{}", install_dir.display()),
++            &format!("Nectar was unregistered, but file cleanup could not be scheduled. Inspect the application files in:\n\n{}", install_dir.display()),
+             MB_OK | MB_ICONINFORMATION,
+         );
+         return;
+     }
+-    message("Nectar has been uninstalled.", MB_OK | MB_ICONINFORMATION);
++    message("Nectar was unregistered. Application file cleanup has been scheduled; your settings and other files are kept.", MB_OK | MB_ICONINFORMATION);
+ }
+diff --git a/src-tauri/src/uninstall_registry.rs b/src-tauri/src/uninstall_registry.rs
+index 0f4393f..f06e8bf 100644
+--- a/src-tauri/src/uninstall_registry.rs
++++ b/src-tauri/src/uninstall_registry.rs
+@@ -32,23 +32,6 @@ unsafe fn set_dword(hkey: HKEY, name: &str, value: u32) -> windows::core::Result
+     RegSetValueExW(hkey, PCWSTR(name_w.as_ptr()), Some(0), REG_DWORD, Some(&bytes)).ok()
+ }
+ 
+-fn dir_size_kb(path: &std::path::Path) -> u32 {
+-    fn walk(dir: &std::path::Path, total: &mut u64) {
+-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+-        for entry in entries.flatten() {
+-            let path = entry.path();
+-            if path.is_dir() {
+-                walk(&path, total);
+-            } else if let Ok(meta) = entry.metadata() {
+-                *total += meta.len();
+-            }
+-        }
+-    }
+-    let mut total = 0u64;
+-    walk(path, &mut total);
+-    (total / 1024) as u32
+-}
+-
+ fn known_folder(rfid: *const GUID) -> Option<PathBuf> {
+     unsafe {
+         let pwstr = SHGetKnownFolderPath(rfid, KF_FLAG_CREATE, None).ok()?;
+@@ -145,20 +128,8 @@ fn repair_uninstaller(exe: &Path, uninstall_exe: &Path) {
+ }
+ 
+ pub fn install_scope(install_dir: &Path) -> Option<bool> {
+-    if let Ok(scope) = std::fs::read_to_string(install_dir.join(".install-scope")) {
+-        return Some(scope.trim() == "all-users");
+-    }
+-    let dir = format!("{}\\", install_dir.to_string_lossy().to_lowercase());
+-    let under = |var: &str, sub: &str| {
+-        std::env::var(var).is_ok_and(|base| dir.starts_with(&format!("{}\\{}", base.to_lowercase(), sub)))
+-    };
+-    if under("ProgramFiles", "") || under("ProgramW6432", "") || under("ProgramFiles(x86)", "") {
+-        Some(true)
+-    } else if under("LOCALAPPDATA", "programs\\") {
+-        Some(false)
+-    } else {
+-        None
+-    }
++    crate::install_safety::validate_dir(install_dir).ok()?;
++    crate::install_safety::scope(install_dir)
+ }
+ 
+ pub fn heal_uninstall_registration() {
+@@ -178,7 +149,7 @@ pub fn heal_uninstall_registration() {
+     let uninstall_string = format!("\"{}\" --uninstall", uninstall_exe.to_string_lossy());
+     let install_location = install_dir.to_string_lossy().to_string();
+     let icon_str = format!("{},0", current_exe.to_string_lossy());
+-    let size_kb = dir_size_kb(install_dir);
++    let size_kb = crate::install_safety::owned_size_kb(install_dir);
+ 
+     unsafe {
+         let root = if all_users { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+@@ -208,6 +179,7 @@ pub fn heal_uninstall_registration() {
+         let _ = set_string(hkey, "UninstallString", &uninstall_string);
+         let _ = set_dword(hkey, "NoModify", 1);
+         let _ = set_dword(hkey, "NoRepair", 1);
++        let _ = set_dword(hkey, "CurrentUser", u32::from(!all_users));
+         let _ = set_dword(hkey, "EstimatedSize", size_kb);
+ 
+         let _ = RegCloseKey(hkey);

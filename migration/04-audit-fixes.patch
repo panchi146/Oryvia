@@ -1,0 +1,1318 @@
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index 495e4e5..0fd8d7a 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -20,6 +20,6 @@ jobs:
+         working-directory: installer-app
+       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+       - run: cargo check --locked --manifest-path installer-app/src-tauri/Cargo.toml
+-      - run: node --test tests/migration.test.mjs
+-      - run: rustc --edition 2021 --test install_safety.rs -o install_safety_tests.exe
+-      - run: ./install_safety_tests.exe
++      - run: node --test tests/*.test.mjs
++      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin oryvia
++      - run: cargo test --locked --manifest-path installer-app/src-tauri/Cargo.toml
+diff --git a/install_safety.rs b/install_safety.rs
+index 85fcef4..751ab0c 100644
+--- a/install_safety.rs
++++ b/install_safety.rs
+@@ -12,7 +12,15 @@ pub fn owned_size_kb(dir: &Path) -> u32 {
+ }
+ 
+ pub fn scope(dir: &Path) -> Option<bool> {
+-    match std::fs::read_to_string(dir.join(".install-scope")).ok()?.trim() {
++    let marker = dir.join(".install-scope");
++    let meta = std::fs::symlink_metadata(&marker).ok()?;
++    if !meta.is_file() || meta.file_type().is_symlink() { return None; }
++    #[cfg(windows)]
++    {
++        use std::os::windows::fs::MetadataExt;
++        if meta.file_attributes() & 0x400 != 0 { return None; }
++    }
++    match std::fs::read_to_string(marker).ok()?.trim() {
+         "user" => Some(false),
+         "all-users" => Some(true),
+         _ => None,
+@@ -115,31 +123,69 @@ pub fn remove_taskbar_shortcuts(dir: &Path) {
+     }
+ }
+ 
++pub const STARTUP_NAME: &str = "Oryvia";
++const OWNERSHIP_SCRIPT: &str = include_str!("installer/build/ownership.ps1");
++const CLEANUP_SCRIPT: &str = include_str!("installer/build/cleanup.ps1");
++
++#[cfg(windows)]
++pub fn registration_check(dir: &Path, all_users: bool) -> Result<(), String> {
++    use std::os::windows::process::CommandExt;
++    let directory = ps_literal(&dir.to_string_lossy());
++    let command = format!("{OWNERSHIP_SCRIPT}\n$ErrorActionPreference = 'Stop'; try {{ $store = New-OryviaRegistryStore {scope}; Assert-OryviaRegistrationWritable $store {directory} }} catch {{ Write-Output $_.Exception.Message; exit 1 }}",
++        scope = if all_users { "$true" } else { "$false" });
++    let output = std::process::Command::new("powershell.exe")
++        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &command])
++        .creation_flags(0x0800_0000).output().map_err(|e| e.to_string())?;
++    if output.status.success() { Ok(()) } else {
++        Err(format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)).trim().to_string())
++    }
++}
++
+ pub fn remove_app_files_command(dir: &Path, pid: u32) -> Result<String, String> {
+     validate_dir(dir)?;
+-    if scope(dir).is_none() {
+-        return Err("Uninstall refused: missing or invalid install scope marker".into());
+-    }
+-    let files = APP_FILES.iter().map(|name| ps_literal(&dir.join(name).to_string_lossy()))
+-        .collect::<Vec<_>>().join(", ");
+-    // Literal paths throughout; no cmd.exe / RunOnce string or interpolated log path.
+-    // Leave the folder (including unknown files and settings) intact, even if empty.
+-    Ok(format!(
+-        "Wait-Process -Id {pid} -ErrorAction SilentlyContinue; \
+-         $files = @({files}); \
+-         for ($i = 0; $i -lt 40; $i++) {{ \
+-           $left = @($files | Where-Object {{ Test-Path -LiteralPath $_ }}); \
+-           if ($left.Count -eq 0) {{ break }}; \
+-           foreach ($file in $left) {{ \
+-             $item = Get-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue; \
+-             if ($item -and !$item.PSIsContainer -and !($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {{ \
+-               Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue \
+-             }} \
+-           }}; Start-Sleep -Milliseconds 500 \
+-         }}; \
+-         $left = @($files | Where-Object {{ Test-Path -LiteralPath $_ }}); \
+-         if ($left.Count) {{ $left | Add-Content -LiteralPath (Join-Path $env:TEMP 'oryvia-uninstall-pending.log') }}"
+-    ))
++    let all_users = scope(dir).ok_or("Uninstall refused: missing or invalid install scope marker")?;
++    let directory = ps_literal(&dir.to_string_lossy());
++    let expected_scope = if all_users { "all-users" } else { "user" };
++    let scope_arg = if all_users { "$true" } else { "$false" };
++    let startup_name = ps_literal(STARTUP_NAME);
++    // No registry is changed by the parent. The helper waits for exit, preserves
++    // marker/registration on locked executables and checks ownership again.
++    Ok(format!("{OWNERSHIP_SCRIPT}\n{CLEANUP_SCRIPT}\n\
++        Wait-Process -Id {pid} -ErrorAction SilentlyContinue; \
++        $ErrorActionPreference = 'Stop'; \
++        $store = New-OryviaRegistryStore {scope_arg}; \
++        $beforeDelete = {{ Assert-OryviaRegistrationWritable $store {directory}; $registered = & $store.Read 'Uninstall' 'UninstallString'; if (Test-OryviaCommandTarget $registered {directory} @('oryvia.exe')) {{ 'oryvia.exe' }} else {{ 'uninstall.exe' }} }}; \
++        $finalize = {{ Remove-OryviaOwnedStartup $store {directory} {startup_name}; Remove-OryviaOwnedRegistration $store {directory} }}; \
++        $ok = Invoke-OryviaFileCleanup -Directory {directory} -ExpectedScope '{expected_scope}' -BeforeDelete $beforeDelete -Finalize $finalize; \
++        if (!$ok) {{ exit 1 }}; if ($PSCommandPath) {{ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue }}"))
++}
++
++#[cfg(windows)]
++pub fn schedule_cleanup_with_program(dir: &Path, pid: u32, program: &Path) -> Result<(), String> {
++    use std::io::Write;
++    use std::os::windows::process::CommandExt;
++    let command = remove_app_files_command(dir, pid)?;
++    // Retain the exact helper on failure so registry/ACL cleanup can be retried
++    // even if both binaries were removed. Create-new never overwrites a file.
++    // Program Files inherits protected ACLs; no script is placed in shared TEMP.
++    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
++        .map_err(|e| e.to_string())?.as_nanos();
++    let helper = dir.join(format!(".oryvia-uninstall-retry-{pid}-{nonce}.ps1"));
++    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&helper).map_err(|e| e.to_string())?;
++    file.write_all(b"\xef\xbb\xbf").and_then(|_| file.write_all(command.as_bytes())).and_then(|_| file.sync_all())
++        .map_err(|e| format!("Cannot persist retry helper; registration is unchanged: {e}"))?;
++    drop(file);
++    let spawn = |flags| std::process::Command::new(program)
++        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File"])
++        .arg(&helper)
++        .current_dir(std::env::temp_dir()).creation_flags(flags).spawn();
++    spawn(0x0800_0000 | 0x0100_0000).or_else(|_| spawn(0x0800_0000))
++        .map(|_| ()).map_err(|e| format!("Cleanup helper did not start; files, marker and registration are retained. Retry helper: {}. {e}", helper.display()))
++}
++
++#[cfg(windows)]
++pub fn schedule_cleanup(dir: &Path, pid: u32) -> Result<(), String> {
++    schedule_cleanup_with_program(dir, pid, Path::new("powershell.exe"))
+ }
+ 
+ #[cfg(test)]
+@@ -178,20 +224,52 @@ mod tests {
+ 
+     #[test]
+     #[cfg(windows)]
+-    fn executes_cleanup_in_sandbox_preserving_unrelated_files_and_settings() {
++    fn helper_spawn_failure_preserves_retryable_files_and_marker() {
++        let dir = fixture();
++        std::fs::write(dir.join(".install-scope"), "user").unwrap();
++        std::fs::write(dir.join("oryvia.exe"), "fixture").unwrap();
++        let result = schedule_cleanup_with_program(&dir, 0, &dir.join("missing-helper.exe"));
++        assert!(result.is_err());
++        assert_eq!(scope(&dir), Some(false));
++        assert!(dir.join("oryvia.exe").is_file());
++        let helpers: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten()
++            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".oryvia-uninstall-retry-")).collect();
++        assert_eq!(helpers.len(), 1);
++        for helper in helpers { std::fs::remove_file(helper.path()).unwrap(); }
++        std::fs::remove_file(dir.join("oryvia.exe")).unwrap();
++        std::fs::remove_file(dir.join(".install-scope")).unwrap();
++        std::fs::remove_dir(dir).unwrap();
++    }
++
++    #[test]
++    #[cfg(windows)]
++    fn assembled_unicode_helper_runs_with_an_in_memory_registry_only() {
+         use std::os::windows::process::CommandExt;
+         let base = fixture();
+-        let dir = base.join("Nectar shared '& $() [test]");
++        let dir = base.join("Oryvia thử '& $() [x]");
+         std::fs::create_dir(&dir).unwrap();
+-        for name in APP_FILES { std::fs::write(dir.join(name), if *name == ".install-scope" { "user" } else { "fixture" }).unwrap(); }
+-        for name in ["another-app.exe", "settings.json"] { std::fs::write(dir.join(name), "keep").unwrap(); }
+-        let script = remove_app_files_command(&dir, 0).unwrap();
++        std::fs::write(dir.join(".install-scope"), "user").unwrap();
++        std::fs::write(dir.join("oryvia.exe"), "fixture").unwrap();
++        std::fs::write(dir.join("uninstall.exe"), "fixture").unwrap();
++        std::fs::write(dir.join("settings.json"), "keep").unwrap();
++        let command = remove_app_files_command(&dir, 0).unwrap();
++        let production_factory = "$store = New-OryviaRegistryStore $false;";
++        assert_eq!(command.matches(production_factory).count(), 1);
++        // Only the store factory is injected. Execute the actual assembled
++        // helper, marker protocol and finalizer without touching HKCU/HKLM.
++        let command = command.replace(production_factory,
++            "$store = @{ Exists = { param($branch) $false }; Read = { param($branch, $name) $null }; DeleteTree = { throw 'Unexpected fixture delete' }; DeleteValue = { throw 'Unexpected fixture delete' } };");
++        let helper = dir.join("fixture-helper.ps1");
++        let mut bytes = vec![0xef, 0xbb, 0xbf];
++        bytes.extend_from_slice(command.as_bytes());
++        std::fs::write(&helper, bytes).unwrap();
+         let result = std::process::Command::new("powershell.exe")
+-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+-            .creation_flags(0x0800_0000).output().unwrap();
+-        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+-        for name in APP_FILES { assert!(!dir.join(name).exists(), "{name}"); }
+-        for name in ["another-app.exe", "settings.json"] { assert_eq!(std::fs::read_to_string(dir.join(name)).unwrap(), "keep"); std::fs::remove_file(dir.join(name)).unwrap(); }
++            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
++            .arg(&helper).creation_flags(0x0800_0000).output().unwrap();
++        assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
++        for name in [".install-scope", "oryvia.exe", "uninstall.exe", "fixture-helper.ps1"] { assert!(!dir.join(name).exists(), "{name}"); }
++        assert_eq!(std::fs::read_to_string(dir.join("settings.json")).unwrap(), "keep");
++        std::fs::remove_file(dir.join("settings.json")).unwrap();
+         std::fs::remove_dir(dir).unwrap();
+         std::fs::remove_dir(base).unwrap();
+     }
+diff --git a/installer/build/cleanup.ps1 b/installer/build/cleanup.ps1
+new file mode 100644
+index 0000000..413fa5d
+--- /dev/null
++++ b/installer/build/cleanup.ps1
+@@ -0,0 +1,55 @@
++# Dot-sourced by the delayed cleanup helper and by isolated behavior tests.
++function Test-OryviaPlainDirectory([string]$Directory) {
++    $current = $Directory
++    while ($current) {
++        $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
++        if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
++        $parent = [IO.Directory]::GetParent($current)
++        if (-not $parent) { break }
++        $current = $parent.FullName
++    }
++    return $true
++}
++
++function Invoke-OryviaFileCleanup {
++    param([string]$Directory, [string]$ExpectedScope, [scriptblock]$Finalize = {},
++          [scriptblock]$BeforeDelete = { 'uninstall.exe' }, [int]$Attempts = 40,
++          [int]$DelayMilliseconds = 500, [string]$LogPath = (Join-Path $env:TEMP 'oryvia-uninstall-pending.log'))
++    $marker = Join-Path $Directory '.install-scope'
++    $files = @((Join-Path $Directory 'oryvia.exe'), (Join-Path $Directory 'uninstall.exe'))
++    try {
++        for ($i = 0; $i -lt $Attempts; $i++) {
++            if (-not (Test-OryviaPlainDirectory $Directory)) { throw 'Install directory became a reparse point or is not a plain directory.' }
++            $markerItem = Get-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
++            if ($markerItem -and ($markerItem.PSIsContainer -or ($markerItem.Attributes -band [IO.FileAttributes]::ReparsePoint))) { throw 'Install marker is a directory or reparse point.' }
++            if (-not (Test-Path -LiteralPath $marker -PathType Leaf) -or
++                (Get-Content -LiteralPath $marker -Raw -ErrorAction Stop).Trim() -cne $ExpectedScope) { throw 'Install scope marker is missing or changed; cleanup stopped.' }
++            # Delete the executable referenced by registration LAST. If the
++            # other binary is locked, the registered entry point stays usable.
++            $retryExecutable = & $BeforeDelete
++            if ($retryExecutable -notin @('oryvia.exe', 'uninstall.exe')) { throw 'Unverified retry executable' }
++            $last = Join-Path $Directory $retryExecutable
++            $first = $files | Where-Object { $_ -cne $last }
++            foreach ($file in @($first, $last)) {
++                if ($file -ceq $last -and (Test-Path -LiteralPath $first)) { continue }
++                $item = Get-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
++                if ($item -and -not $item.PSIsContainer -and -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
++                    Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
++                }
++            }
++            $left = @($files | Where-Object { Test-Path -LiteralPath $_ })
++            if ($left.Count -eq 0) {
++                # Registration stays retryable until BOTH executable paths are gone.
++                & $Finalize
++                Remove-Item -LiteralPath $marker -Force -ErrorAction Stop
++                return $true
++            }
++            if ($i + 1 -lt $Attempts) { Start-Sleep -Milliseconds $DelayMilliseconds }
++        }
++        throw ('Executable cleanup incomplete; marker and registration retained. Remaining: ' + ($left -join ', '))
++    } catch {
++        $entry = ('{0:o} | {1} | {2} | Retry helper: {3}' -f [DateTime]::UtcNow, $Directory, $_.Exception.Message, $PSCommandPath)
++        Add-Content -LiteralPath $LogPath -Value $entry -ErrorAction SilentlyContinue
++        return $false
++    }
++}
+diff --git a/installer/build/installer.nsh b/installer/build/installer.nsh
+index ac50d5f..7538ade 100644
+--- a/installer/build/installer.nsh
++++ b/installer/build/installer.nsh
+@@ -99,25 +99,78 @@ Function NectarMinimizeClick
+   System::Call 'user32::ShowWindow(i $HWNDPARENT, i ${SW_MINIMIZE_VAL})'
+ FunctionEnd
+ 
++!define ORYVIA_OWNERSHIP_SOURCE "${__FILEDIR__}\ownership.ps1"
++
+ !macro NSIS_HOOK_PREINSTALL
+-  ; No global TEMP backup or file-size ownership heuristic.
++  InitPluginsDir
++  File /oname=$PLUGINSDIR\oryvia-ownership.ps1 "${ORYVIA_OWNERSHIP_SOURCE}"
++  StrCpy $R8 "user"
++  ${If} $MultiUser.InstallMode == "AllUsers"
++    StrCpy $R8 "all-users"
++  ${EndIf}
++  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\oryvia-ownership.ps1" -Action Check -InstallDir "$INSTDIR" -Scope "$R8"'
++  Pop $R0
++  Pop $R1
++  ${If} $R0 != 0
++    SetErrorLevel 1
++    Abort "$R1"
++  ${EndIf}
++  ${If} ${FileExists} "$INSTDIR\.install-scope.oryvia-new"
++    SetErrorLevel 1
++    Abort "A pending marker file already exists. Inspect it before retrying; it was not overwritten."
++  ${EndIf}
+ !macroend
+ 
+ !macro NSIS_HOOK_POSTINSTALL
+-  ; Current main app provides the patched native uninstaller. Retire the old
+-  ; custom uninstaller rather than restoring a potentially unsafe old binary.
+-  Delete "$INSTDIR\uninstall.exe"
+-  WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --uninstall"
++  ; CLI 2.11.4 writes NSIS registration BEFORE POSTINSTALL. Keep its
++  ; uninstaller until marker and native registration have both succeeded.
++  StrCpy $R8 "user"
++  ${If} $MultiUser.InstallMode == "AllUsers"
++    StrCpy $R8 "all-users"
++  ${EndIf}
++  ClearErrors
++  FileOpen $R0 "$INSTDIR\.install-scope.oryvia-new" w
++  IfErrors oryvia_marker_failed
++  ClearErrors
++  FileWrite $R0 "$R8"
++  IfErrors oryvia_marker_write_failed
++  ClearErrors
++  FileClose $R0
++  IfErrors oryvia_marker_failed
++  ClearErrors
++  FileOpen $R0 "$INSTDIR\.install-scope.oryvia-new" r
++  IfErrors oryvia_marker_failed
++  ClearErrors
++  FileRead $R0 $R1
++  IfErrors oryvia_marker_write_failed
++  StrCmp $R1 $R8 0 oryvia_marker_write_failed
++  ClearErrors
++  FileClose $R0
++  IfErrors oryvia_marker_failed
++  ; Same-directory atomic replacement; preserve the previous marker on failure.
++  System::Call 'kernel32::MoveFileExW(w "$INSTDIR\.install-scope.oryvia-new", w "$INSTDIR\.install-scope", i 9) i .r0'
++  StrCmp $0 0 oryvia_marker_failed
+   DeleteRegValue SHCTX "${UNINSTKEY}" "QuietUninstallString"
++  ClearErrors
++  WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --uninstall"
+   WriteRegDWORD SHCTX "${UNINSTKEY}" "NoModify" 1
+   WriteRegDWORD SHCTX "${UNINSTKEY}" "NoRepair" 1
+-  FileOpen $0 "$INSTDIR\.install-scope" w
+-  ${If} $MultiUser.InstallMode == "AllUsers"
+-    FileWrite $0 "all-users"
+-  ${Else}
+-    FileWrite $0 "user"
+-  ${EndIf}
+-  FileClose $0
++  IfErrors oryvia_marker_failed
++  Delete "$INSTDIR\uninstall.exe"
++  Goto oryvia_marker_done
++oryvia_marker_write_failed:
++  FileClose $R0
++oryvia_marker_failed:
++  Delete "$INSTDIR\.install-scope.oryvia-new"
++  ; If no valid marker remains, remove only this path's newly written entry.
++  ; A prior valid same-scope marker keeps a consistent registration for retry.
++  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\oryvia-ownership.ps1" -Action MarkerFailureCleanup -InstallDir "$INSTDIR" -Scope "$R8"'
++  Pop $R0
++  Pop $R1
++  SetErrorLevel 1
++  DetailPrint "Oryvia marker/registration update failed. $R1"
++  Abort "Oryvia could not verify its install scope marker. Installation was not completed. Inspect permissions and retry. $R1"
++oryvia_marker_done:
+ !macroend
+ 
+ ;
+diff --git a/installer/build/ownership.ps1 b/installer/build/ownership.ps1
+new file mode 100644
+index 0000000..3b76188
+--- /dev/null
++++ b/installer/build/ownership.ps1
+@@ -0,0 +1,133 @@
++param(
++    [ValidateSet('', 'Check', 'MarkerFailureCleanup')][string]$Action = '',
++    [string]$InstallDir,
++    [ValidateSet('user', 'all-users')][string]$Scope = 'user'
++)
++
++# Shared by Custom Installer, native/heal, delayed cleanup and NSIS.
++# Store operations are injected in tests; production opens only the current
++# account's HKCU or the selected HKLM scope, always in the 64-bit view.
++function Get-OryviaNormalizedPath([string]$Value) {
++    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
++    $value = $Value.Trim()
++    if ($value.StartsWith('"') -and $value.EndsWith('"')) { $value = $value.Substring(1, $value.Length - 2) }
++    if ($value.Contains('"') -or $value.Contains([char]0)) { return $null }
++    $value = $value.Replace('/', '\')
++    if ($value.StartsWith('\\?\UNC\', [StringComparison]::OrdinalIgnoreCase)) { $value = '\\' + $value.Substring(8) }
++    elseif ($value.StartsWith('\\?\')) { $value = $value.Substring(4) }
++    if ($value -notmatch '^(?:[A-Za-z]:\\|\\\\[^\\]+\\[^\\]+)') { return $null }
++    try { return [IO.Path]::GetFullPath($value).TrimEnd('\').ToUpperInvariant() } catch { return $null }
++}
++
++function Test-OryviaCommandTarget([string]$Command, [string]$Directory, [string[]]$Names) {
++    if ([string]::IsNullOrWhiteSpace($Command)) { return $false }
++    $command = $Command.Trim()
++    foreach ($name in $Names) {
++        $expected = Get-OryviaNormalizedPath (Join-Path $Directory $name)
++        if (-not $expected) { continue }
++        # auto-launch 0.5.0 writes the raw full path with no args in this app.
++        if ((Get-OryviaNormalizedPath $command) -ceq $expected) { return $true }
++        if ($command -match '^"([^"\r\n]+)"(?:\s|$)') { $exe = $Matches[1] }
++        elseif ($command -match '^([^\s"]+)(?:\s|$)') { $exe = $Matches[1] }
++        else { continue }
++        if ((Get-OryviaNormalizedPath $exe) -ceq $expected) { return $true }
++    }
++    return $false
++}
++
++function New-OryviaRegistryStore([bool]$AllUsers) {
++    $locations = @{
++        Uninstall = @($(if ($AllUsers) { 'LocalMachine' } else { 'CurrentUser' }), 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Oryvia')
++        Product = @($(if ($AllUsers) { 'LocalMachine' } else { 'CurrentUser' }), 'Software\panchi146\Oryvia')
++        Run = @('CurrentUser', 'Software\Microsoft\Windows\CurrentVersion\Run')
++        Approved = @('CurrentUser', 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run')
++    }
++    return @{
++        Exists = { param($branch)
++            $loc = $locations[$branch]
++            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::$($loc[0]), [Microsoft.Win32.RegistryView]::Registry64)
++            try { $key = $base.OpenSubKey($loc[1]); try { return $null -ne $key } finally { if ($key) { $key.Dispose() } } } finally { $base.Dispose() }
++        }.GetNewClosure()
++        Read = { param($branch, $name)
++            $loc = $locations[$branch]
++            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::$($loc[0]), [Microsoft.Win32.RegistryView]::Registry64)
++            try {
++                $key = $base.OpenSubKey($loc[1])
++                try {
++                    if (-not $key) { return $null }
++                    $value = $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
++                    if ($null -ne $value -and $value -isnot [string]) { throw 'Unexpected registry value type' }
++                    return $value
++                } finally { if ($key) { $key.Dispose() } }
++            } finally { $base.Dispose() }
++        }.GetNewClosure()
++        DeleteTree = { param($branch)
++            $loc = $locations[$branch]
++            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::$($loc[0]), [Microsoft.Win32.RegistryView]::Registry64)
++            try { $base.DeleteSubKeyTree($loc[1], $false) } finally { $base.Dispose() }
++        }.GetNewClosure()
++        DeleteValue = { param($branch, $name)
++            $loc = $locations[$branch]
++            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::$($loc[0]), [Microsoft.Win32.RegistryView]::Registry64)
++            try { $key = $base.OpenSubKey($loc[1], $true); try { if ($key) { $key.DeleteValue($name, $false) } } finally { if ($key) { $key.Dispose() } } } finally { $base.Dispose() }
++        }.GetNewClosure()
++    }
++}
++
++function Test-OryviaRegistrationOwned($Store, [string]$Directory) {
++    if (-not (& $Store.Exists 'Uninstall')) { return $false }
++    $location = & $Store.Read 'Uninstall' 'InstallLocation'
++    $uninstall = & $Store.Read 'Uninstall' 'UninstallString'
++    $expected = Get-OryviaNormalizedPath $Directory
++    return $expected -and ((Get-OryviaNormalizedPath $location) -ceq $expected) -and
++        (Test-OryviaCommandTarget $uninstall $Directory @('oryvia.exe', 'uninstall.exe'))
++}
++
++function Assert-OryviaRegistrationWritable($Store, [string]$Directory) {
++    if (-not (Get-OryviaNormalizedPath $Directory)) { throw 'Invalid absolute Windows install path' }
++    if ((& $Store.Exists 'Uninstall') -and -not (Test-OryviaRegistrationOwned $Store $Directory)) {
++        throw 'registration_conflict: Oryvia is registered at a different or unverified path in this scope. Uninstall that copy first; its registration was preserved.'
++    }
++    $product = & $Store.Read 'Product' ''
++    if ($null -ne $product -and (Get-OryviaNormalizedPath $product) -cne (Get-OryviaNormalizedPath $Directory)) {
++        throw 'registration_conflict: The Oryvia install-location key belongs to another path; it was preserved.'
++    }
++}
++
++function Remove-OryviaOwnedStartup($Store, [string]$Directory, [string]$StartupName = 'Oryvia') {
++    $run = & $Store.Read 'Run' $StartupName
++    if (-not (Test-OryviaCommandTarget $run $Directory @('oryvia.exe'))) { return }
++    # Recheck before mutation. A missing Run value is not proof for StartupApproved.
++    if ((& $Store.Read 'Run' $StartupName) -cne $run) { throw 'Startup registration changed during cleanup' }
++    & $Store.DeleteValue 'Run' $StartupName
++    & $Store.DeleteValue 'Approved' $StartupName
++}
++
++function Remove-OryviaOwnedRegistration($Store, [string]$Directory) {
++    Assert-OryviaRegistrationWritable $Store $Directory
++    if (Test-OryviaRegistrationOwned $Store $Directory) { & $Store.DeleteTree 'Uninstall' }
++    $product = & $Store.Read 'Product' ''
++    if ($null -ne $product -and (Get-OryviaNormalizedPath $product) -ceq (Get-OryviaNormalizedPath $Directory)) { & $Store.DeleteTree 'Product' }
++}
++
++function Repair-OryviaMarkerFailure($Store, [string]$Directory, [string]$ExpectedScope) {
++    $marker = Join-Path $Directory '.install-scope'
++    $valid = (Test-Path -LiteralPath $marker -PathType Leaf) -and ((Get-Content -LiteralPath $marker -Raw).Trim() -ceq $ExpectedScope)
++    if (-not $valid) { Remove-OryviaOwnedRegistration $Store $Directory }
++}
++
++if ($Action) {
++    $ErrorActionPreference = 'Stop'
++    try {
++        $store = New-OryviaRegistryStore ($Scope -eq 'all-users')
++        if ($Action -eq 'Check') {
++            Assert-OryviaRegistrationWritable $store $InstallDir
++            $marker = Join-Path $InstallDir '.install-scope'
++            if (Test-Path -LiteralPath $marker) {
++                if ((Get-Content -LiteralPath $marker -Raw).Trim() -cne $Scope) { throw 'Install scope marker is invalid or belongs to another scope.' }
++            }
++        } elseif ($Action -eq 'MarkerFailureCleanup') {
++            Repair-OryviaMarkerFailure $store $InstallDir $Scope
++        }
++    } catch { Write-Output $_.Exception.Message; exit 1 }
++}
+diff --git a/installer-app/src/App.tsx b/installer-app/src/App.tsx
+index 64469fd..9724f7f 100644
+--- a/installer-app/src/App.tsx
++++ b/installer-app/src/App.tsx
+@@ -427,7 +427,7 @@ export default function App() {
+               >
+                 <CheckCircle2 size={48} strokeWidth={1.5} />
+               </motion.div>
+-              <h1>Oryvia has been uninstalled</h1>
++              <h1>File cleanup scheduled</h1>
+ 
+               {!feedbackSent ? (
+                 <>
+diff --git a/installer-app/src-tauri/src/commands.rs b/installer-app/src-tauri/src/commands.rs
+index beba4db..12e1d1b 100644
+--- a/installer-app/src-tauri/src/commands.rs
++++ b/installer-app/src-tauri/src/commands.rs
+@@ -97,6 +97,7 @@ pub async fn start_install(
+ 
+     let install_path = std::path::PathBuf::from(&install_dir);
+     crate::install_safety::validate_install(&install_path, all_users)?;
++    crate::install_safety::registration_check(&install_path, all_users)?;
+ 
+     let app_extract = app.clone();
+     let install_path_extract = install_path.clone();
+@@ -243,14 +244,14 @@ pub async fn start_uninstall(app: tauri::AppHandle) -> Result<(), String> {
+ 
+     let _ = app.emit(
+         "uninstall-progress",
+-        ProgressEvent { stage: "removing".into(), percent: 0.6, message: "Removing registry entries...".into() },
++        ProgressEvent { stage: "removing".into(), percent: 0.6, message: "Verifying ownership and preparing cleanup...".into() },
+     );
+ 
+     crate::uninstall::uninstall(&install_dir, all_users_install, &shortcuts)?;
+ 
+     let _ = app.emit(
+         "uninstall-progress",
+-        ProgressEvent { stage: "done".into(), percent: 1.0, message: "Done".into() },
++        ProgressEvent { stage: "scheduled".into(), percent: 1.0, message: "File cleanup scheduled. Close this window to continue; locked files may require retrying.".into() },
+     );
+ 
+     Ok(())
+diff --git a/installer-app/src-tauri/src/registry.rs b/installer-app/src-tauri/src/registry.rs
+index 00870b1..746c1f9 100644
+--- a/installer-app/src-tauri/src/registry.rs
++++ b/installer-app/src-tauri/src/registry.rs
+@@ -1,5 +1,5 @@
+ use windows::Win32::System::Registry::{
+-    RegDeleteKeyValueW, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
++    RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
+     HKEY_LOCAL_MACHINE, KEY_WRITE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
+ };
+ use windows::core::PCWSTR;
+@@ -21,6 +21,8 @@ pub struct UninstallInfo<'a> {
+ }
+ 
+ pub fn write_uninstall_entry(all_users: bool, info: &UninstallInfo) -> windows::core::Result<()> {
++    crate::install_safety::registration_check(std::path::Path::new(info.install_location), all_users)
++        .map_err(|error| windows::core::Error::new(windows::core::HRESULT(0x80070005u32 as i32), error))?;
+     unsafe {
+         let root = if all_users { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+         let subkey_w = wide(UNINSTALL_SUBKEY);
+@@ -68,17 +70,3 @@ unsafe fn set_dword(hkey: HKEY, name: &str, value: u32) -> windows::core::Result
+     RegSetValueExW(hkey, PCWSTR(name_w.as_ptr()), Some(0), REG_DWORD, Some(&bytes)).ok()
+ }
+ 
+-pub fn remove_uninstall_entry(all_users: bool) -> windows::core::Result<()> {
+-    unsafe {
+-        let root = if all_users { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+-        let subkey_w = wide(UNINSTALL_SUBKEY);
+-        let install_key = wide(r"Software\panchi146\Oryvia");
+-        let _ = RegDeleteTreeW(root, PCWSTR(install_key.as_ptr()));
+-        let run_key = wide(r"Software\Microsoft\Windows\CurrentVersion\Run");
+-        let approved_key = wide(r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run");
+-        let value = wide("oryvia");
+-        let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(run_key.as_ptr()), PCWSTR(value.as_ptr()));
+-        let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(approved_key.as_ptr()), PCWSTR(value.as_ptr()));
+-        RegDeleteTreeW(root, PCWSTR(subkey_w.as_ptr())).ok()
+-    }
+-}
+diff --git a/installer-app/src-tauri/src/uninstall.rs b/installer-app/src-tauri/src/uninstall.rs
+index 55dfc8b..a1db6da 100644
+--- a/installer-app/src-tauri/src/uninstall.rs
++++ b/installer-app/src-tauri/src/uninstall.rs
+@@ -2,10 +2,10 @@ use std::os::windows::process::CommandExt;
+ use std::path::{Path, PathBuf};
+ 
+ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+-const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+ 
+ pub fn uninstall(install_dir: &Path, all_users: bool, shortcuts: &[PathBuf]) -> Result<(), String> {
+-    let ps_command = crate::install_safety::remove_app_files_command(install_dir, std::process::id())?;
++    crate::install_safety::registration_check(install_dir, all_users)?;
++    crate::install_safety::remove_app_files_command(install_dir, std::process::id())?;
+ 
+     crate::install_safety::stop_installed_app(install_dir)?;
+     let app_exe = install_dir.join(crate::install_safety::APP_FILES[0]);
+@@ -19,18 +19,6 @@ pub fn uninstall(install_dir: &Path, all_users: bool, shortcuts: &[PathBuf]) ->
+     }
+     crate::install_safety::remove_taskbar_shortcuts(install_dir);
+ 
+-    let _ = crate::registry::remove_uninstall_entry(all_users);
+-
+-    let spawn = |flags: u32| {
+-        std::process::Command::new("powershell")
+-            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps_command])
+-            .current_dir(std::env::temp_dir())
+-            .creation_flags(flags)
+-            .spawn()
+-    };
+-    spawn(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB)
+-        .or_else(|_| spawn(CREATE_NO_WINDOW))
+-        .map_err(|e| e.to_string())?;
+-
++    crate::install_safety::schedule_cleanup(install_dir, std::process::id())?;
+     Ok(())
+ }
+diff --git a/src/i18n/native-uninstall.json b/src/i18n/native-uninstall.json
+new file mode 100644
+index 0000000..e6883b2
+--- /dev/null
++++ b/src/i18n/native-uninstall.json
+@@ -0,0 +1,12 @@
++{
++  "en": {
++    "uninstall.cleanup.scheduled": "Application file cleanup is scheduled after this window closes. Locked files keep the marker and registration for retry. Settings and other files are kept.",
++    "uninstall.cleanup.scheduleFailed": "Cleanup could not be scheduled. Registration, files and marker are retained. You can retry uninstalling:",
++    "uninstall.registration.unverified": "This installation could not be verified. Existing registrations were preserved. Details:"
++  },
++  "vi": {
++    "uninstall.cleanup.scheduled": "Đã lên lịch dọn tệp sau khi đóng cửa sổ này. Nếu tệp bị khóa, marker và đăng ký được giữ để thử lại. Cài đặt và các tệp khác được giữ nguyên.",
++    "uninstall.cleanup.scheduleFailed": "Không khởi chạy được tiến trình dọn tệp. Đăng ký, tệp và marker được giữ nguyên. Bạn có thể thử gỡ lại:",
++    "uninstall.registration.unverified": "Không xác minh được bản cài này. Các đăng ký hiện có được giữ nguyên. Chi tiết:"
++  }
++}
+diff --git a/src/i18n/translations.ts b/src/i18n/translations.ts
+index fc5e9c9..597d061 100644
+--- a/src/i18n/translations.ts
++++ b/src/i18n/translations.ts
+@@ -1,7 +1,9 @@
++import nativeUninstall from "./native-uninstall.json";
+ export type Language = "en" | "vi";
+ 
+ export const translations = {
+   en: {
++    ...nativeUninstall.en,
+     // General
+     "app.name": "Oryvia",
+     "common.loading": "Loading...",
+@@ -234,6 +236,8 @@ export const translations = {
+     "settings.about.update.available": "Update Available (v{version})",
+     "settings.about.update.uptodate": "Up to Date (v{version})",
+     "settings.about.update.error": "Update Check Failed",
++    "settings.about.update.unconfigured": "Updates are not configured",
++    "settings.about.update.unconfigured.desc": "This local copy has no update service configured.",
+     "settings.about.group.updates": "Updates",
+     "settings.about.autoUpdate.label": "Automatic Updates",
+     "settings.about.autoUpdate.desc": "Download and install updates automatically",
+@@ -496,6 +500,7 @@ export const translations = {
+     "widget.remove": "Remove",
+   },
+   vi: {
++    ...nativeUninstall.vi,
+     // General
+     "app.name": "Oryvia",
+     "common.loading": "Đang tải...",
+@@ -728,6 +733,8 @@ export const translations = {
+     "settings.about.update.available": "Đã có bản cập nhật (v{version})",
+     "settings.about.update.uptodate": "Đã là bản mới nhất (v{version})",
+     "settings.about.update.error": "Lỗi kiểm tra cập nhật",
++    "settings.about.update.unconfigured": "Chưa cấu hình cập nhật",
++    "settings.about.update.unconfigured.desc": "Bản dùng cục bộ này chưa được cấu hình dịch vụ cập nhật.",
+     "settings.about.group.updates": "Cập nhật",
+     "settings.about.autoUpdate.label": "Tự động cập nhật",
+     "settings.about.autoUpdate.desc": "Tự động tải và cài đặt phiên bản mới",
+diff --git a/src/settings/AboutTab.tsx b/src/settings/AboutTab.tsx
+index 265c48d..19f3f45 100644
+--- a/src/settings/AboutTab.tsx
++++ b/src/settings/AboutTab.tsx
+@@ -105,6 +105,8 @@ export function AboutTab({
+         return t("overlay.update.downloading", { percent: "" });
+       case "installing":
+         return t("overlay.update.installing");
++      case "unconfigured":
++        return t("settings.about.update.unconfigured");
+       case "error":
+         return t("settings.about.update.error");
+       default:
+@@ -113,7 +115,9 @@ export function AboutTab({
+   };
+ 
+   const getUpdateDesc = () =>
+-    updateStatus === "available"
++    updateStatus === "unconfigured"
++      ? t("settings.about.update.unconfigured.desc")
++      : updateStatus === "available"
+       ? t("settings.about.update.available", { version: updateVersion })
+       : t("settings.about.version", { version: appVersion || "—" });
+ 
+@@ -129,6 +133,8 @@ export function AboutTab({
+         return t("overlay.update.downloading", { percent: "" });
+       case "installing":
+         return t("overlay.update.installing");
++      case "unconfigured":
++        return t("settings.about.update.unconfigured");
+       case "error":
+         return t("settings.about.update.error");
+       default:
+diff --git a/src/settings/useSettings.ts b/src/settings/useSettings.ts
+index eb46b14..152eeae 100644
+--- a/src/settings/useSettings.ts
++++ b/src/settings/useSettings.ts
+@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
+ import { listen, emit } from "@tauri-apps/api/event";
+ import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
+ import { getVersion } from "@tauri-apps/api/app";
+-import type { UpdateCheckResult } from "../updater";
++import { type UpdateCheckResult, type UpdateStatus, statusFromUpdateResult, statusFromUpdateError, finishUpdateActivity } from "../updater";
+ import { useSettingsSync } from "../hooks/useSettingsSync";
+ import { hexToHsl } from "../theme";
+ import type { WidgetConfig, MonitorInfo, MonitorMode } from "./types";
+@@ -136,9 +136,7 @@ export function useSettings() {
+   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
+   const [lowBatteryThreshold, setLowBatteryThreshold] = useState(20);
+   const [hasBattery, setHasBattery] = useState(true);
+-  const [updateStatus, setUpdateStatus] = useState<
+-    "idle" | "checking" | "available" | "uptodate" | "error" | "downloading" | "installing"
+-  >("idle");
++  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
+   const [updateVersion, setUpdateVersion] = useState("");
+   const [appVersion, setAppVersion] = useState("");
+   const [autoUpdate, setAutoUpdate] = useState(
+@@ -430,15 +428,12 @@ export function useSettings() {
+     setUpdateStatus("checking");
+     try {
+       const result = await invoke<UpdateCheckResult>("check_for_updates", { force: manual });
+-      if (result.available) {
+-        setUpdateStatus("available");
+-        setUpdateVersion(result.version ?? "");
+-      } else {
+-        setUpdateStatus("uptodate");
+-      }
++      setUpdateStatus(statusFromUpdateResult(result));
++      setUpdateVersion(result.version ?? "");
+     } catch (e) {
+-      console.error("Updater error:", e);
+-      setUpdateStatus("error");
++      const status = statusFromUpdateError(e);
++      if (status === "error") console.error("Updater error:", e);
++      setUpdateStatus(status);
+     }
+   };
+ 
+@@ -448,8 +443,9 @@ export function useSettings() {
+       await invoke("install_update");
+       setUpdateStatus("idle");
+     } catch (e) {
+-      console.error(e);
+-      setUpdateStatus("error");
++      const status = statusFromUpdateError(e);
++      if (status === "error") console.error(e);
++      setUpdateStatus(status);
+     }
+   };
+ 
+@@ -464,7 +460,7 @@ export function useSettings() {
+           setUpdateStatus("installing");
+           break;
+         case "done":
+-          setUpdateStatus((prev) => (prev === "downloading" || prev === "installing" ? "idle" : prev));
++          setUpdateStatus(finishUpdateActivity);
+           break;
+       }
+     });
+diff --git a/src/updater.ts b/src/updater.ts
+index 2386798..8305bd1 100644
+--- a/src/updater.ts
++++ b/src/updater.ts
+@@ -1,6 +1,21 @@
+ export interface UpdateCheckResult {
+   available: boolean;
++  configured?: boolean;
+   version?: string;
+   date?: string;
+   body?: string;
+ }
++
++export type UpdateStatus = "idle" | "checking" | "available" | "uptodate" | "unconfigured" | "error" | "downloading" | "installing";
++
++export function statusFromUpdateResult(result: UpdateCheckResult): UpdateStatus {
++  return result.configured === false ? "unconfigured" : result.available ? "available" : "uptodate";
++}
++
++export function statusFromUpdateError(error: unknown): UpdateStatus {
++  return String(error).includes("updater_not_configured") ? "unconfigured" : "error";
++}
++
++export function finishUpdateActivity(previous: UpdateStatus): UpdateStatus {
++  return ["checking", "downloading", "installing"].includes(previous) ? "idle" : previous;
++}
+diff --git a/src-tauri/src/main.rs b/src-tauri/src/main.rs
+index a005a04..168ce72 100644
+--- a/src-tauri/src/main.rs
++++ b/src-tauri/src/main.rs
+@@ -7,6 +7,7 @@ mod services;
+ mod commands;
+ mod monitors;
+ mod updater;
++mod update_policy;
+ mod uninstall_registry;
+ mod native_uninstall;
+ #[path = "../../install_safety.rs"]
+@@ -88,10 +89,9 @@ fn main() {
+         .plugin(tauri_plugin_opener::init())
+         .plugin(tauri_plugin_dialog::init())
+         .plugin(tauri_plugin_updater::Builder::new().build())
+-        .plugin(tauri_plugin_autostart::init(
+-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+-            Some(vec![]),
+-        ))
++        .plugin(tauri_plugin_autostart::Builder::new()
++            .app_name(crate::install_safety::STARTUP_NAME)
++            .build())
+         .invoke_handler(tauri::generate_handler![
+             hide_native_osd,
+             open_settings_window,
+diff --git a/src-tauri/src/native_uninstall.rs b/src-tauri/src/native_uninstall.rs
+index 4025893..06724d3 100644
+--- a/src-tauri/src/native_uninstall.rs
++++ b/src-tauri/src/native_uninstall.rs
+@@ -1,12 +1,8 @@
+ 
+ use std::os::windows::ffi::OsStrExt;
+-use std::os::windows::process::CommandExt;
+ use std::path::{Path, PathBuf};
+ use windows::Win32::Foundation::{CloseHandle, HANDLE};
+ use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+-use windows::Win32::System::Registry::{
+-    RegDeleteKeyValueW, RegDeleteTreeW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
+-};
+ use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+ use windows::Win32::UI::Shell::ShellExecuteW;
+ use windows::Win32::UI::WindowsAndMessaging::{
+@@ -15,12 +11,23 @@ use windows::Win32::UI::WindowsAndMessaging::{
+ use windows::core::PCWSTR;
+ 
+ use crate::uninstall_registry::{
+-    desktop_dir, legacy_start_menu_dir, start_menu_programs_dir, wide, UNINSTALL_SUBKEY,
++    desktop_dir, legacy_start_menu_dir, start_menu_programs_dir, wide,
+ };
+ 
+-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+ const TITLE: &str = "Oryvia";
+ 
++// Native uninstall runs before webviews exist. Reuse the same i18n resource
++// and persisted language key as the Main App, without initializing Tauri UI.
++fn native_text(key: &str) -> String {
++    let language = std::env::var_os("APPDATA")
++        .and_then(|base| std::fs::read_to_string(PathBuf::from(base).join("com.panchi146.oryvia").join("settings.json")).ok())
++        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
++        .and_then(|settings| settings.get("nectar-language").and_then(|value| value.as_str()).map(str::to_owned))
++        .filter(|language| language == "vi").unwrap_or_else(|| "en".to_string());
++    let messages: serde_json::Value = serde_json::from_str(include_str!("../../src/i18n/native-uninstall.json")).unwrap_or_default();
++    messages[&language][key].as_str().unwrap_or(key).to_string()
++}
++
+ pub fn requested() -> bool {
+     let by_arg = std::env::args().skip(1).any(|a| a == "--uninstall");
+     let by_name = std::env::current_exe()
+@@ -36,6 +43,10 @@ fn message(text: &str, flags: windows::Win32::UI::WindowsAndMessaging::MESSAGEBO
+     unsafe { MessageBoxW(None, PCWSTR(text_w.as_ptr()), PCWSTR(title_w.as_ptr()), flags | MB_TOPMOST) }
+ }
+ 
++pub fn report_registration_conflict(error: &str) {
++    message(&format!("{}\n\n{error}", native_text("uninstall.registration.unverified")), MB_OK | MB_ICONINFORMATION);
++}
++
+ pub fn is_elevated() -> bool {
+     unsafe {
+         let mut token = HANDLE::default();
+@@ -86,21 +97,6 @@ fn remove_shortcuts(all_users: bool, install_dir: &Path) {
+     }
+ }
+ 
+-fn remove_registry(all_users: bool) {
+-    unsafe {
+-        let root = if all_users { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+-        let subkey_w = wide(UNINSTALL_SUBKEY);
+-        let _ = RegDeleteTreeW(root, PCWSTR(subkey_w.as_ptr()));
+-        let install_key = wide(r"Software\panchi146\Oryvia");
+-        let _ = RegDeleteTreeW(root, PCWSTR(install_key.as_ptr()));
+-
+-        let run_key = wide(r"Software\Microsoft\Windows\CurrentVersion\Run");
+-        let approved_key = wide(r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run");
+-        let value = wide("nectar");
+-        let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(run_key.as_ptr()), PCWSTR(value.as_ptr()));
+-        let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(approved_key.as_ptr()), PCWSTR(value.as_ptr()));
+-    }
+-}
+ 
+ pub fn run() {
+     let Ok(exe) = std::env::current_exe() else { return };
+@@ -126,9 +122,14 @@ pub fn run() {
+         return;
+     }
+ 
+-    let ps_command = match crate::install_safety::remove_app_files_command(&install_dir, std::process::id()) {
+-        Ok(command) => command,
+-        Err(error) => { message(&error, MB_OK | MB_ICONINFORMATION); return; }
++    let validated = crate::install_safety::registration_check(&install_dir, all_users)
++        .and_then(|_| crate::install_safety::remove_app_files_command(&install_dir, std::process::id()).map(|_| ()));
++    match validated {
++        Ok(()) => (),
++        Err(error) => {
++            report_registration_conflict(&error);
++            return;
++        }
+     };
+ 
+     if let Err(error) = crate::install_safety::stop_installed_app(&install_dir) {
+@@ -137,23 +138,14 @@ pub fn run() {
+     restore_taskbar_if_left_hidden();
+     remove_shortcuts(all_users, &install_dir);
+     crate::install_safety::remove_taskbar_shortcuts(&install_dir);
+-    remove_registry(all_users);
+-
+-    let spawn = |flags: u32| {
+-        std::process::Command::new("powershell")
+-            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps_command])
+-            .current_dir(std::env::temp_dir())
+-            .creation_flags(flags)
+-            .spawn()
+-    };
+-    let spawned = spawn(CREATE_NO_WINDOW | 0x0100_0000).or_else(|_| spawn(CREATE_NO_WINDOW));
++    let spawned = crate::install_safety::schedule_cleanup(&install_dir, std::process::id());
+ 
+-    if spawned.is_err() {
++    if let Err(error) = spawned {
+         message(
+-            &format!("Oryvia was unregistered, but file cleanup could not be scheduled. Inspect the application files in:\n\n{}", install_dir.display()),
++            &format!("{}\n\n{}\n\n{}", native_text("uninstall.cleanup.scheduleFailed"), install_dir.display(), error),
+             MB_OK | MB_ICONINFORMATION,
+         );
+         return;
+     }
+-    message("Oryvia was unregistered. Application file cleanup has been scheduled; your settings and other files are kept.", MB_OK | MB_ICONINFORMATION);
++    message(&native_text("uninstall.cleanup.scheduled"), MB_OK | MB_ICONINFORMATION);
+ }
+diff --git a/src-tauri/src/uninstall_registry.rs b/src-tauri/src/uninstall_registry.rs
+index b4a1a3f..68626fe 100644
+--- a/src-tauri/src/uninstall_registry.rs
++++ b/src-tauri/src/uninstall_registry.rs
+@@ -137,6 +137,11 @@ pub fn heal_uninstall_registration() {
+     let Some(install_dir) = current_exe.parent() else { return };
+ 
+     let Some(all_users) = install_scope(install_dir) else { return };
++    if let Err(error) = crate::install_safety::registration_check(install_dir, all_users) {
++        crate::diagnostics::log(&format!("Uninstall registration was not healed: {error}"));
++        crate::native_uninstall::report_registration_conflict(&error);
++        return;
++    }
+     let scope_file = install_dir.join(".install-scope");
+     if !scope_file.exists() {
+         let _ = std::fs::write(&scope_file, if all_users { "all-users" } else { "user" });
+diff --git a/src-tauri/src/update_policy.rs b/src-tauri/src/update_policy.rs
+new file mode 100644
+index 0000000..366f161
+--- /dev/null
++++ b/src-tauri/src/update_policy.rs
+@@ -0,0 +1,22 @@
++//! Pure configuration gate; no endpoint/key is synthesized for local-only use.
++pub fn configured(updater: Option<&serde_json::Value>) -> bool {
++    let Some(updater) = updater else { return false };
++    let key = updater.get("pubkey").and_then(|value| value.as_str()).unwrap_or("");
++    let Some(endpoints) = updater.get("endpoints").and_then(|value| value.as_array()) else { return false };
++    !key.trim().is_empty() && !endpoints.is_empty() && endpoints.iter().all(|endpoint| {
++        endpoint.as_str().is_some_and(|url| url.starts_with("https://") && !url.to_ascii_lowercase().contains("kua8/nectar"))
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn local_only_and_upstream_configs_cannot_start_a_network_check() {
++        assert!(!configured(None));
++        assert!(!configured(Some(&serde_json::json!({"endpoints":[],"pubkey":""}))));
++        assert!(!configured(Some(&serde_json::json!({"endpoints":["https://github.com/kua8/Nectar/releases/latest"],"pubkey":"test-public-key"}))));
++        assert!(!configured(Some(&serde_json::json!({"endpoints":["http://test.invalid/updates"],"pubkey":"test-public-key"}))));
++        assert!(configured(Some(&serde_json::json!({"endpoints":["https://test.invalid/updates"],"pubkey":"test-public-key"}))));
++    }
++}
+diff --git a/src-tauri/src/updater.rs b/src-tauri/src/updater.rs
+index 4201dd7..0860022 100644
+--- a/src-tauri/src/updater.rs
++++ b/src-tauri/src/updater.rs
+@@ -25,6 +25,8 @@ static LAST_CHECK: Mutex<Option<UpdateCheckResult>> = Mutex::new(None);
+ pub struct UpdateCheckResult {
+     pub available: bool,
+     #[serde(skip_serializing_if = "Option::is_none")]
++    pub configured: Option<bool>,
++    #[serde(skip_serializing_if = "Option::is_none")]
+     pub version: Option<String>,
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub date: Option<String>,
+@@ -78,6 +80,7 @@ fn result_from_state(state: &PersistedUpdateState) -> UpdateCheckResult {
+     }
+     UpdateCheckResult {
+         available: true,
++        configured: None,
+         version: Some(state.version.clone()),
+         date: (!state.date.is_empty()).then(|| state.date.clone()),
+         body: None,
+@@ -112,8 +115,11 @@ pub fn release_is_old_enough(result: &UpdateCheckResult) -> bool {
+ /// is set. Development builds skip the automatic network check because their
+ /// version never tracks releases; manual checks still work.
+ pub async fn check(app: &AppHandle, force: bool) -> Result<UpdateCheckResult, String> {
++    if ensure_update_configuration(app).is_err() {
++        if force { return Err("updater_not_configured".into()); }
++        return Ok(unconfigured_result());
++    }
+     if !is_installed_copy() { return Ok(UpdateCheckResult::default()); }
+-    ensure_update_configuration(app)?;
+     if !force {
+         if let Some(cached) = cached_result(app) {
+             return Ok(cached);
+@@ -142,6 +148,7 @@ pub async fn check(app: &AppHandle, force: bool) -> Result<UpdateCheckResult, St
+     let result = match &update {
+         Some(update) => UpdateCheckResult {
+             available: true,
++        configured: None,
+             version: Some(update.version.clone()),
+             date: update
+                 .raw_json
+@@ -172,6 +179,10 @@ pub async fn check(app: &AppHandle, force: bool) -> Result<UpdateCheckResult, St
+ /// launches the NSIS installer and terminates this process, which then
+ /// relaunches the app; on other platforms this returns after restarting.
+ pub async fn install(app: &AppHandle) -> Result<(), String> {
++    if ensure_update_configuration(app).is_err() {
++        let _ = app.emit("auto-update-status", serde_json::json!({ "status": "done" }));
++        return Err("updater_not_configured".into());
++    }
+     if !is_installed_copy() {
+         let _ = app.emit("auto-update-status", serde_json::json!({ "status": "done" }));
+         return Err("Updates require an installed release build".into());
+@@ -195,18 +206,13 @@ fn is_installed_copy() -> bool {
+         .is_some_and(|dir| crate::uninstall_registry::install_scope(&dir).is_some())
+ }
+ 
++fn unconfigured_result() -> UpdateCheckResult {
++    UpdateCheckResult { configured: Some(false), ..Default::default() }
++}
++
+ fn ensure_update_configuration(app: &AppHandle) -> Result<(), String> {
+-    let config = &app.config().plugins.0;
+-    let updater = config.get("updater").ok_or("Updater is not configured")?;
+-    let key = updater.get("pubkey").and_then(|v| v.as_str()).unwrap_or_default();
+-    let endpoints = updater.get("endpoints").and_then(|v| v.as_array());
+-    if key.is_empty() || endpoints.is_none_or(|urls| urls.is_empty() || urls.iter().any(|url| {
+-        let value = url.as_str().unwrap_or_default();
+-        !value.starts_with("https://") || value.to_ascii_lowercase().contains("kua8/nectar")
+-    })) {
+-        return Err("Configure an Oryvia HTTPS update endpoint and public signing key before enabling updates".into());
+-    }
+-    Ok(())
++    if crate::update_policy::configured(app.config().plugins.0.get("updater")) { Ok(()) }
++    else { Err("updater_not_configured".into()) }
+ }
+ 
+ fn installer_scope_args() -> Vec<String> {
+@@ -285,6 +291,11 @@ async fn install_inner(app: &AppHandle) -> Result<(), String> {
+ /// Startup entry point: always checks so the UI can show an update badge, and
+ /// auto-installs only when the user enabled it and the release has aged.
+ pub async fn run_startup_check(app: AppHandle) {
++    if ensure_update_configuration(&app).is_err() {
++        let _ = app.emit("update-available", unconfigured_result());
++        let _ = app.emit("auto-update-status", serde_json::json!({ "status": "done" }));
++        return;
++    }
+     let auto_update = crate::utils::get_setting_str(&app, "nectar-auto-update").as_deref() == Some("true");
+ 
+     if auto_update {
+@@ -339,6 +350,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
+ 
+ #[tauri::command]
+ pub fn get_update_state(app: AppHandle) -> UpdateCheckResult {
++    if ensure_update_configuration(&app).is_err() { return unconfigured_result(); }
+     if let Ok(cached) = LAST_CHECK.lock() {
+         if let Some(result) = cached.as_ref() {
+             let current_ver = app.package_info().version.to_string();
+diff --git a/tests/install-safety.test.mjs b/tests/install-safety.test.mjs
+new file mode 100644
+index 0000000..1807c65
+--- /dev/null
++++ b/tests/install-safety.test.mjs
+@@ -0,0 +1,10 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import {spawnSync} from 'node:child_process';
++import {fileURLToPath} from 'node:url';
++test('Windows fixture: owned registry/startup, locked files and retry behavior',{skip:process.platform!=='win32'},()=>{
++  const script=fileURLToPath(new URL('./install-safety.test.ps1',import.meta.url));
++  const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script],{encoding:'utf8',timeout:60000,windowsHide:true});
++  assert.equal(result.status,0,`${result.stdout}\n${result.stderr}\n${result.error??''}`);
++  assert.match(result.stdout,/7 behavior tests passed/);
++});
+diff --git a/tests/install-safety.test.ps1 b/tests/install-safety.test.ps1
+new file mode 100644
+index 0000000..82b0cae
+--- /dev/null
++++ b/tests/install-safety.test.ps1
+@@ -0,0 +1,166 @@
++$ErrorActionPreference = 'Stop'
++. "$PSScriptRoot\..\installer\build\ownership.ps1"
++. "$PSScriptRoot\..\installer\build\cleanup.ps1"
++$script:passed = 0
++function Assert-True($Value, [string]$Message) {
++    if (-not $Value) { throw $Message }
++}
++function Assert-Throws([scriptblock]$Body) {
++    $threw = $false
++    try { & $Body } catch { $threw = $true }
++    Assert-True $threw 'Expected a conflict/error; operation was accepted'
++}
++function Test-Case([string]$Name, [scriptblock]$Body) {
++    & $Body
++    $script:passed++
++    Write-Output "PASS $Name"
++}
++function New-FixtureStore {
++    $data = @{ Uninstall = @{}; Product = @{}; Run = @{}; Approved = @{} }
++    return @{
++        Data = $data
++        Exists = { param($branch) return $data[$branch].Count -gt 0 }.GetNewClosure()
++        Read = { param($branch, $name) return $data[$branch][$name] }.GetNewClosure()
++        DeleteTree = { param($branch) $data[$branch].Clear() }.GetNewClosure()
++        DeleteValue = { param($branch, $name) [void]$data[$branch].Remove($name) }.GetNewClosure()
++    }
++}
++function Set-FixtureRegistration($Store, $Directory) {
++    $Store.Data.Uninstall.InstallLocation = $Directory
++    $Store.Data.Uninstall.UninstallString = '"' + (Join-Path $Directory 'uninstall.exe') + '" --uninstall'
++    $Store.Data.Product[''] = $Directory
++}
++
++Test-Case 'Startup ownership: preserve Nectar, a different Oryvia path and orphan approval' {
++    $store = New-FixtureStore
++    $a = "C:\Ứng dụng\Oryvia A ' [x]"
++    $b = 'D:\Apps\Oryvia B'
++    $store.Data.Run.Nectar = '"C:\Nectar\nectar.exe"'
++    $store.Data.Run.Oryvia = '"' + (Join-Path $b 'oryvia.exe') + '" --hidden'
++    $store.Data.Approved.Nectar = 'keep'
++    $store.Data.Approved.Oryvia = 'keep'
++    Remove-OryviaOwnedStartup $store $a
++    Assert-True ($store.Data.Run.Count -eq 2) 'Foreign startup was removed'
++    Assert-True ($store.Data.Approved.Count -eq 2) 'Foreign approval was removed'
++    $store.Data.Run.Oryvia = '"' + (Join-Path $a 'oryvia.exe') + '" --hidden "argument with spaces"'
++    Remove-OryviaOwnedStartup $store $a
++    Assert-True (-not $store.Data.Run.ContainsKey('Oryvia')) 'Owned startup remained'
++    Assert-True (-not $store.Data.Approved.ContainsKey('Oryvia')) 'Owned approval remained'
++    Assert-True ($store.Data.Run.Nectar -and $store.Data.Approved.Nectar) 'Nectar must be preserved'
++    $store.Data.Approved.Oryvia = 'orphan'
++    Remove-OryviaOwnedStartup $store $a
++    Assert-True ($store.Data.Approved.Oryvia -eq 'orphan') 'Orphan approval has no ownership proof'
++    $store.Data.Run.Oryvia = Join-Path $a 'oryvia.exe'
++    Remove-OryviaOwnedStartup $store $a
++    Assert-True (-not $store.Data.Run.Oryvia) 'Exact unquoted autostart path was not recognized'
++}
++
++Test-Case 'Registration A cannot be overwritten or removed by B in either scope' {
++    foreach ($scopeName in @('user', 'all-users')) {
++        $store = New-FixtureStore
++        Set-FixtureRegistration $store 'C:\Ứng dụng\Oryvia A'
++        Assert-Throws { Assert-OryviaRegistrationWritable $store 'D:\Apps\Oryvia B' }
++        Assert-Throws { Remove-OryviaOwnedRegistration $store 'D:\Apps\Oryvia B' }
++        Assert-True ($store.Data.Uninstall.InstallLocation -eq 'C:\Ứng dụng\Oryvia A') "$scopeName registration was overwritten/deleted"
++        $store.Data.Uninstall.InstallLocation = '"c:/Ứng dụng/oryvia a/./"'
++        Assert-OryviaRegistrationWritable $store 'C:\Ứng dụng\Oryvia A'
++        $store.Data.Uninstall.UninstallString = '"D:\Apps\Oryvia B\uninstall.exe" --uninstall'
++        Assert-Throws { Remove-OryviaOwnedRegistration $store 'C:\Ứng dụng\Oryvia A' }
++        $store.Data.Uninstall.UninstallString = '"C:\Ứng dụng\Oryvia A\oryvia.exe" --uninstall'
++        Remove-OryviaOwnedRegistration $store 'C:\Ứng dụng\Oryvia A'
++        Assert-True ($store.Data.Uninstall.Count -eq 0) 'Owned registration remained'
++    }
++}
++
++$fixture = Join-Path $env:TEMP ('oryvia-audit-tests-' + [Guid]::NewGuid().ToString('N'))
++[void][IO.Directory]::CreateDirectory($fixture)
++$directory = Join-Path $fixture "Oryvia dùng chung ' & `$() [x]"
++[void][IO.Directory]::CreateDirectory($directory)
++$log = Join-Path $fixture 'cleanup.log'
++try {
++    Test-Case 'Locked executable preserves marker/registration, then retry completes' {
++        $store = New-FixtureStore
++        Set-FixtureRegistration $store $directory
++        [IO.File]::WriteAllText((Join-Path $directory '.install-scope'), 'user')
++        [IO.File]::WriteAllText((Join-Path $directory 'oryvia.exe'), 'fixture')
++        [IO.File]::WriteAllText((Join-Path $directory 'uninstall.exe'), 'fixture')
++        [IO.File]::WriteAllText((Join-Path $directory 'foreign.exe'), 'foreign')
++        [IO.File]::WriteAllText((Join-Path $directory 'settings.json'), 'keep')
++        $finalize = { Remove-OryviaOwnedStartup $store $directory; Remove-OryviaOwnedRegistration $store $directory }
++        $lock = [IO.File]::Open((Join-Path $directory 'oryvia.exe'), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
++        try {
++            $result = Invoke-OryviaFileCleanup -Directory $directory -ExpectedScope user -Finalize $finalize -Attempts 2 -DelayMilliseconds 10 -LogPath $log
++            Assert-True ($result -eq $false) 'Locked cleanup claimed success'
++            Assert-True ((Get-Content -LiteralPath (Join-Path $directory '.install-scope') -Raw) -eq 'user') 'Marker was lost while locked'
++            Assert-True ($store.Data.Uninstall.Count -gt 0) 'Registration was lost while locked'
++            Assert-True (Test-Path -LiteralPath (Join-Path $directory 'uninstall.exe')) 'Registered retry executable was removed while main was locked'
++            Assert-True ((Get-Content -LiteralPath $log -Raw).Contains('incomplete')) 'Missing clear pending log'
++        } finally { $lock.Dispose() }
++        $result = Invoke-OryviaFileCleanup -Directory $directory -ExpectedScope user -Finalize $finalize -Attempts 2 -DelayMilliseconds 10 -LogPath $log
++        Assert-True ($result -eq $true) ('Retry did not complete: ' + (Get-Content -LiteralPath $log -Raw))
++        Assert-True (-not (Test-Path -LiteralPath (Join-Path $directory '.install-scope'))) 'Marker remained after success'
++        Assert-True ($store.Data.Uninstall.Count -eq 0) 'Registration remained after success'
++        Assert-True ((Get-Content -LiteralPath (Join-Path $directory 'foreign.exe') -Raw) -eq 'foreign') 'Foreign file was changed'
++        Assert-True ((Get-Content -LiteralPath (Join-Path $directory 'settings.json') -Raw) -eq 'keep') 'Settings were changed'
++    }
++    Test-Case 'Missing, corrupt and wrong-scope marker prevent deletion and finalization' {
++        foreach ($scopeText in @($null, 'corrupt', 'all-users')) {
++            $marker = Join-Path $directory '.install-scope'
++            if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker }
++            if ($null -ne $scopeText) { [IO.File]::WriteAllText($marker, $scopeText) }
++            [IO.File]::WriteAllText((Join-Path $directory 'oryvia.exe'), 'retained')
++            $state = @{ Finalized = $false }
++            $finalize = { $state.Finalized = $true }.GetNewClosure()
++            $result = Invoke-OryviaFileCleanup -Directory $directory -ExpectedScope user -Finalize $finalize -Attempts 1 -LogPath $log
++            Assert-True (-not $result -and -not $state.Finalized) 'Invalid marker allowed finalization'
++            Assert-True ((Get-Content -LiteralPath (Join-Path $directory 'oryvia.exe') -Raw) -eq 'retained') 'Invalid marker allowed deletion'
++        }
++    }
++    Test-Case 'Native registration entry remains usable when the other executable is locked' {
++        $store = New-FixtureStore
++        Set-FixtureRegistration $store $directory
++        $store.Data.Uninstall.UninstallString = '"' + (Join-Path $directory 'oryvia.exe') + '" --uninstall'
++        [IO.File]::WriteAllText((Join-Path $directory '.install-scope'), 'user')
++        [IO.File]::WriteAllText((Join-Path $directory 'oryvia.exe'), 'native retry')
++        [IO.File]::WriteAllText((Join-Path $directory 'uninstall.exe'), 'locked fixture')
++        $beforeDelete = { Assert-OryviaRegistrationWritable $store $directory; 'oryvia.exe' }
++        $lock = [IO.File]::Open((Join-Path $directory 'uninstall.exe'), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
++        try {
++            $result = Invoke-OryviaFileCleanup -Directory $directory -ExpectedScope user -BeforeDelete $beforeDelete -Attempts 1 -LogPath $log
++            Assert-True (-not $result) 'Locked native cleanup claimed success'
++            Assert-True (Test-Path -LiteralPath (Join-Path $directory 'oryvia.exe')) 'Native retry executable was removed'
++            Assert-True ($store.Data.Uninstall.Count -gt 0) 'Native registration was removed'
++        } finally { $lock.Dispose() }
++        [IO.File]::Delete((Join-Path $directory 'oryvia.exe'))
++        [IO.File]::Delete((Join-Path $directory 'uninstall.exe'))
++    }
++    Test-Case 'Registration finalization failure retains marker and logs a retry condition' {
++        [IO.File]::WriteAllText((Join-Path $directory '.install-scope'), 'user')
++        $result = Invoke-OryviaFileCleanup -Directory $directory -ExpectedScope user -Finalize { throw 'fixture registry access denied' } -Attempts 1 -LogPath $log
++        Assert-True (-not $result) 'Registry failure claimed success'
++        Assert-True (Test-Path -LiteralPath (Join-Path $directory '.install-scope')) 'Marker lost on finalization failure'
++        Assert-True ((Get-Content -LiteralPath $log -Raw).Contains('fixture registry access denied')) 'Registry error was not logged'
++    }
++    Test-Case 'Marker-write recovery removes only owned inconsistent registration' {
++        $store = New-FixtureStore
++        Set-FixtureRegistration $store $directory
++        Repair-OryviaMarkerFailure $store $directory user
++        Assert-True ($store.Data.Uninstall.Count -gt 0) 'Valid previous marker registration was removed'
++        [IO.File]::Delete((Join-Path $directory '.install-scope'))
++        Repair-OryviaMarkerFailure $store $directory user
++        Assert-True ($store.Data.Uninstall.Count -eq 0) 'Unmarked new registration remained inconsistent'
++        Set-FixtureRegistration $store 'D:\Other Oryvia'
++        Assert-Throws { Repair-OryviaMarkerFailure $store $directory user }
++        Assert-True ($store.Data.Uninstall.Count -gt 0) 'Marker recovery removed another path registration'
++    }
++} finally {
++    # Only exact files created by this fixture, then empty directories; never recurse.
++    foreach ($name in @('.install-scope', 'oryvia.exe', 'uninstall.exe', 'foreign.exe', 'settings.json')) {
++        $file = Join-Path $directory $name
++        if (Test-Path -LiteralPath $file) { [IO.File]::Delete($file) }
++    }
++    if (Test-Path -LiteralPath $log) { [IO.File]::Delete($log) }
++    [IO.Directory]::Delete($directory)
++    [IO.Directory]::Delete($fixture)
++}
++Write-Output "RESULT: $script:passed behavior tests passed; no live registry access performed."
+diff --git a/tests/migration.test.mjs b/tests/migration.test.mjs
+index d1b0f70..31d64c3 100644
+--- a/tests/migration.test.mjs
++++ b/tests/migration.test.mjs
+@@ -31,7 +31,7 @@ test('uninstall paths share conservative file deletion and have no recursive fal
+     assert.ok(s.includes('install_safety::remove_app_files_command'));
+     for(const forbidden of ['-Recurse','rd /s','cmd /c','IMAGENAME eq','/IM']) assert.ok(!s.includes(forbidden),`${file}: ${forbidden}`);
+   }
+-  const shared=read('install_safety.rs').split('#[cfg(test)]')[0];
++  const shared=read('install_safety.rs').split('#[cfg(test)]')[0] + read('installer/build/cleanup.ps1');
+   assert.ok(!shared.includes('contains("nectar")'));
+   assert.ok(shared.includes('ReparsePoint'));
+   assert.ok(shared.includes('PSIsContainer'));
+@@ -65,7 +65,9 @@ test('release preparation cannot publish or delete existing releases', () => {
+ 
+ test('custom UI and settings implementation match the supplied baseline', () => {
+   const baseline=json('migration/baseline-sha256.json');
+-  for(const name of ['src/App.tsx','src/App.css','src/settings/useSettings.ts','src/Overlay.tsx','src/Overlay.css','src/theme.ts','installer-app/src/App.css']) {
++  // Settings update-state handling is deliberately changed in the audit fixes;
++  // its behavior is covered by updater-local.test.mjs rather than a stale hash.
++  for(const name of ['src/App.tsx','src/App.css','src/Overlay.tsx','src/Overlay.css','src/theme.ts','installer-app/src/App.css']) {
+     const expected=baseline.find(entry=>entry.path===name);
+     assert.ok(expected,name);
+     const actual=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,name))).digest('hex');
+diff --git a/tests/updater-local.test.mjs b/tests/updater-local.test.mjs
+new file mode 100644
+index 0000000..0c19a8d
+--- /dev/null
++++ b/tests/updater-local.test.mjs
+@@ -0,0 +1,24 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import ts from 'typescript';
++const source=fs.readFileSync(new URL('../src/updater.ts',import.meta.url),'utf8');
++const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
++const policy=await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
++
++test('unconfigured manual/background results and errors always leave loading state',()=>{
++  assert.equal(policy.statusFromUpdateResult({available:false,configured:false}),'unconfigured');
++  assert.equal(policy.statusFromUpdateError('updater_not_configured'),'unconfigured');
++  for(const status of ['checking','downloading','installing'])assert.equal(policy.finishUpdateActivity(status),'idle');
++  assert.equal(policy.finishUpdateActivity('unconfigured'),'unconfigured');
++  assert.equal(policy.statusFromUpdateError('network error'),'error');
++  assert.equal(policy.statusFromUpdateResult({available:true,version:'1.0.1'}),'available');
++});
++
++test('local-only updater and native scheduling messages have both Vietnamese and English',()=>{
++  const text=fs.readFileSync(new URL('../src/i18n/translations.ts',import.meta.url),'utf8');
++  assert.equal((text.match(/"settings\.about\.update\.unconfigured":/g)||[]).length,2);
++  const messages=JSON.parse(fs.readFileSync(new URL('../src/i18n/native-uninstall.json',import.meta.url),'utf8'));
++  assert.deepEqual(Object.keys(messages.en),Object.keys(messages.vi));
++  for(const key of Object.keys(messages.en))assert.ok(messages.en[key]&&messages.vi[key]);
++});

@@ -1,0 +1,564 @@
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index 75598fe..495e4e5 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -1,203 +1,25 @@
+-name: Release
+-
++name: Validate Oryvia source
+ on:
+   workflow_dispatch:
+-
++permissions:
++  contents: read
+ jobs:
+-  release:
+-    strategy:
+-      fail-fast: false
+-      matrix:
+-        platform: [windows-latest]
+-
+-    concurrency:
+-      group: release-${{ github.ref }}
+-      cancel-in-progress: false
+-
+-    runs-on: ${{ matrix.platform }}
+-    permissions:
+-      contents: write
+-
++  validate:
++    runs-on: windows-latest
+     steps:
+       - uses: actions/checkout@v4
++      - uses: actions/setup-node@v4
+         with:
+-          fetch-depth: 0
+-
+-      - name: Setup Bun
+-        uses: oven-sh/setup-bun@v2
+-        with:
+-          bun-version: 1.4.0
+-
+-      - name: Setup Node
+-        uses: actions/setup-node@v4
+-        with:
+-          node-version: 20
+-
+-      - name: Install Rust stable
+-        uses: dtolnay/rust-toolchain@stable
+-
+-      - name: Cache Rust build
+-        uses: Swatinem/rust-cache@v2
+-        with:
+-          workspaces: |
+-            src-tauri
+-            installer-app/src-tauri
+-
+-      - name: Verify version matches tag
+-        shell: bash
+-        run: |
+-          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+-            echo "::error::This workflow must run on a version tag (e.g. v3.8.7)."
+-            exit 1
+-          fi
+-
+-          VERSION="${GITHUB_REF_NAME#v}"
+-          if [[ $VERSION =~ ^[0-9]+\.[0-9]+$ ]]; then
+-            VERSION="$VERSION.0"
+-          fi
+-
+-          PKG_VERSION=$(bun -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")
+-          CONF_VERSION=$(bun -e "console.log(JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version)")
+-          CARGO_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)
+-          INSTALLER_PKG_VERSION=$(bun -e "console.log(JSON.parse(require('fs').readFileSync('installer-app/package.json','utf8')).version)")
+-          INSTALLER_CONF_VERSION=$(bun -e "console.log(JSON.parse(require('fs').readFileSync('installer-app/src-tauri/tauri.conf.json','utf8')).version)")
+-          INSTALLER_CARGO_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' installer-app/src-tauri/Cargo.toml | head -n 1)
+-
+-          echo "Tag: $VERSION | package.json: $PKG_VERSION | tauri.conf.json: $CONF_VERSION | Cargo.toml: $CARGO_VERSION"
+-          echo "installer-app -- package.json: $INSTALLER_PKG_VERSION | tauri.conf.json: $INSTALLER_CONF_VERSION | Cargo.toml: $INSTALLER_CARGO_VERSION"
+-
+-          if [ "$PKG_VERSION" != "$VERSION" ] || [ "$CONF_VERSION" != "$VERSION" ] || [ "$CARGO_VERSION" != "$VERSION" ] || \
+-             [ "$INSTALLER_PKG_VERSION" != "$VERSION" ] || [ "$INSTALLER_CONF_VERSION" != "$VERSION" ] || [ "$INSTALLER_CARGO_VERSION" != "$VERSION" ]; then
+-            echo "::error::Version files do not match tag $VERSION. Run 'bun run bump $VERSION' and commit before tagging."
+-            exit 1
+-          fi
+-
+-      - name: Generate release notes
+-        id: notes
+-        shell: bash
+-        run: |
+-          TAG="${GITHUB_REF_NAME}"
+-          VERSION="${TAG#v}"
+-          PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | sed -n '2p')
+-          if [ -n "$PREV_TAG" ]; then
+-            RANGE="${PREV_TAG}..HEAD"
+-          else
+-            RANGE="HEAD"
+-          fi
+-          COMMIT_COUNT=$(git rev-list --count --no-merges "$RANGE")
+-
+-          COMPARE=""
+-          if [ -n "$PREV_TAG" ]; then
+-            COMPARE=$(printf "\n\n**Full Changelog**: https://github.com/%s/compare/%s...%s" "$GITHUB_REPOSITORY" "$PREV_TAG" "$TAG")
+-          fi
+-
+-          HEAD_BODY=$(git log -1 --pretty=format:"%b" --no-merges)
+-          if [ "$COMMIT_COUNT" -eq 1 ] || printf "%s" "$HEAD_BODY" | grep -qE "^(### |What's New:?$|Improvements:?$|Changed:?$|Bug Fixes:?$)"; then
+-            BODY=$(git log "$RANGE" -1 --pretty=format:"%b" --no-merges)
+-            if [ -z "$(printf "%s" "$BODY" | tr -d "[:space:]")" ]; then
+-              BODY=$(git log "$RANGE" -1 --pretty=format:"%s" --no-merges)
+-            fi
+-            BODY=$(printf "%s" "$BODY" | sed -E "s/^(What's New|Improvements|Changed|Bug Fixes|Other):?$/### \1/")
+-            NOTES=$(printf "%s%s\n" "$BODY" "$COMPARE")
+-            echo "body<<EOF" >> "$GITHUB_OUTPUT"
+-            echo "$NOTES" >> "$GITHUB_OUTPUT"
+-            echo "EOF" >> "$GITHUB_OUTPUT"
+-            exit 0
+-          fi
+-
+-          COMMITS=$(git log "$RANGE" --pretty=format:"%s" --no-merges)
+-
+-          FEATURES=""
+-          FIXES=""
+-          OTHER=""
+-          while IFS= read -r line; do
+-            [ -z "$line" ] && continue
+-            if [[ "$line" =~ ^feat[\(:] ]]; then
+-              FEATURES+=$(printf "\n- %s" "${line#*: }")
+-            elif [[ "$line" =~ ^fix[\(:] ]]; then
+-              FIXES+=$(printf "\n- %s" "${line#*: }")
+-            else
+-              OTHER+=$(printf "\n- %s" "$line")
+-            fi
+-          done <<< "$COMMITS"
+-
+-          NOTES=""
+-          if [ -n "$FEATURES" ]; then
+-            NOTES+=$(printf "\n\n### What's New%s\n" "$FEATURES")
+-          fi
+-          if [ -n "$FIXES" ]; then
+-            NOTES+=$(printf "\n\n### Bug Fixes%s\n" "$FIXES")
+-          fi
+-          if [ -n "$OTHER" ]; then
+-            NOTES+=$(printf "\n\n### Other%s\n" "$OTHER")
+-          fi
+-          NOTES=$(printf "%s%s\n" "$NOTES" "$COMPARE" | sed '/./,$!d')
+-          echo "body<<EOF" >> "$GITHUB_OUTPUT"
+-          echo "$NOTES" >> "$GITHUB_OUTPUT"
+-          echo "EOF" >> "$GITHUB_OUTPUT"
+-
+-      - name: Install frontend dependencies
+-        run: bun install
+-
+-      - name: Build Tauri App
+-        uses: tauri-apps/tauri-action@v0
+-        env:
+-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+-        with:
+-          tagName: ${{ github.ref_name }}
+-          releaseName: "Nectar ${{ github.ref_name }}"
+-          releaseBody: ${{ steps.notes.outputs.body }}
+-          releaseDraft: false
+-          prerelease: false
+-          includeUpdaterJson: true
+-          updaterJsonPreferNsis: true
+-
+-      # tauri-action only uploads the NSIS installer (which now offers a
+-      # "just me" / "all users" choice via installMode: "both" in
+-      # tauri.conf.json). This adds a second, install-free artifact — the raw
+-      # compiled exe, zipped — for people who just want to run it without
+-      # installing anything.
+-      - name: Package portable build
+-        shell: bash
+-        run: |
+-          VERSION="${GITHUB_REF_NAME#v}"
+-          cd src-tauri/target/release
+-          7z a "nectar-${VERSION}-portable-windows-x64.zip" nectar.exe
+-          mv "nectar-${VERSION}-portable-windows-x64.zip" "$GITHUB_WORKSPACE/"
+-
+-      - name: Upload portable build to release
+-        shell: bash
+-        env:
+-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+-        run: |
+-          VERSION="${GITHUB_REF_NAME#v}"
+-          gh release upload "${{ github.ref_name }}" "nectar-${VERSION}-portable-windows-x64.zip" --clobber
+-
+-      # The NSIS installer above exists only to feed the silent auto-updater
+-      # (tauri-plugin-updater only recognizes NSIS/MSI artifacts). This custom
+-      # installer-app/ build is the actual thing people download and run —
+-      # see installer-app/README.md for why the two are separate.
+-      - name: Package installer payload
+-        shell: pwsh
+-        run: |
+-          Compress-Archive -Path "src-tauri/target/release/nectar.exe" -DestinationPath "installer-app/src-tauri/payload.zip" -Force
+-
+-      - name: Install installer-app dependencies
++          node-version: 24
++      - uses: dtolnay/rust-toolchain@stable
++      - run: npm ci --ignore-scripts
++      - run: node node_modules/typescript/bin/tsc --noEmit
++      - run: npm ci --ignore-scripts
+         working-directory: installer-app
+-        run: npm install
+-
+-      - name: Build custom installer
++      - run: node node_modules/typescript/bin/tsc --noEmit
+         working-directory: installer-app
+-        run: npm run tauri build -- --no-bundle
+-
+-      - name: Rename and upload custom installer
+-        shell: bash
+-        env:
+-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+-        run: |
+-          VERSION="${GITHUB_REF_NAME#v}"
+-          OUT="Nectar-Setup-${VERSION}.exe"
+-          cp "installer-app/src-tauri/target/release/nectar-installer.exe" "$OUT"
+-          gh release upload "${{ github.ref_name }}" "$OUT" --clobber
++      - run: cargo check --locked --manifest-path src-tauri/Cargo.toml
++      - run: cargo check --locked --manifest-path installer-app/src-tauri/Cargo.toml
++      - run: node --test tests/migration.test.mjs
++      - run: rustc --edition 2021 --test install_safety.rs -o install_safety_tests.exe
++      - run: ./install_safety_tests.exe
+diff --git a/installer/build/installer.nsh b/installer/build/installer.nsh
+index 617876b..ac50d5f 100644
+--- a/installer/build/installer.nsh
++++ b/installer/build/installer.nsh
+@@ -100,21 +100,17 @@ Function NectarMinimizeClick
+ FunctionEnd
+ 
+ !macro NSIS_HOOK_PREINSTALL
+-  ${GetSize} "$INSTDIR" "/M=uninstall.exe /S=0K /G=0" $0 $1 $2
+-  ${If} $0 > 1024
+-    CopyFiles /SILENT "$INSTDIR\uninstall.exe" "$TEMP\nectar-uninstall.keep"
+-  ${EndIf}
++  ; No global TEMP backup or file-size ownership heuristic.
+ !macroend
+ 
+ !macro NSIS_HOOK_POSTINSTALL
+-  ${If} ${FileExists} "$TEMP\nectar-uninstall.keep"
+-    CopyFiles /SILENT "$TEMP\nectar-uninstall.keep" "$INSTDIR\uninstall.exe"
+-    Delete "$TEMP\nectar-uninstall.keep"
+-    WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\" --uninstall"
+-  ${Else}
+-    Delete "$INSTDIR\uninstall.exe"
+-    WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --uninstall"
+-  ${EndIf}
++  ; Current main app provides the patched native uninstaller. Retire the old
++  ; custom uninstaller rather than restoring a potentially unsafe old binary.
++  Delete "$INSTDIR\uninstall.exe"
++  WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --uninstall"
++  DeleteRegValue SHCTX "${UNINSTKEY}" "QuietUninstallString"
++  WriteRegDWORD SHCTX "${UNINSTKEY}" "NoModify" 1
++  WriteRegDWORD SHCTX "${UNINSTKEY}" "NoRepair" 1
+   FileOpen $0 "$INSTDIR\.install-scope" w
+   ${If} $MultiUser.InstallMode == "AllUsers"
+     FileWrite $0 "all-users"
+diff --git a/installer-app/scripts/build-payload.ps1 b/installer-app/scripts/build-payload.ps1
+index 22f9533..3d10beb 100644
+--- a/installer-app/scripts/build-payload.ps1
++++ b/installer-app/scripts/build-payload.ps1
+@@ -11,8 +11,10 @@ $installerSrcTauri = Join-Path $root "installer-app/src-tauri"
+ 
+ Write-Host "Building main app (release, no bundle)..."
+ Push-Location $root
+-bun run tauri build --no-bundle
+-Pop-Location
++try {
++    bun run tauri build --no-bundle
++    if ($LASTEXITCODE -ne 0) { throw "Main build failed; payload was not replaced." }
++} finally { Pop-Location }
+ 
+ $exePath = Join-Path $mainSrcTauri "target/release/nectar.exe"
+ if (-not (Test-Path $exePath)) {
+diff --git a/scripts/bump-version.mjs b/scripts/bump-version.mjs
+index 779c844..86e2c83 100644
+--- a/scripts/bump-version.mjs
++++ b/scripts/bump-version.mjs
+@@ -25,8 +25,9 @@ function updateCargoToml() {
+ 
+ function updateCargoLock(relativePath, packageName) {
+   const path = resolve(root, relativePath);
+-  const content = readFileSync(path, "utf8");
++  const content = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+   const pattern = new RegExp(`(\\[\\[package\\]\\]\\nname = "${packageName}"\\nversion = ")[^"]*(")`);
++  if (!pattern.test(content)) throw new Error(`Missing Cargo package: ${packageName}`);
+   writeFileSync(path, content.replace(pattern, `$1${version}$2`));
+ }
+ 
+diff --git a/scripts/release.ps1 b/scripts/release.ps1
+index 1b619dd..0148869 100644
+--- a/scripts/release.ps1
++++ b/scripts/release.ps1
+@@ -1,5 +1,6 @@
+ param(
+     [Parameter(Mandatory = $true)][string]$Version,
++    [Parameter(Mandatory = $true)][string]$Repository,
+     [switch]$DryRun,
+     [switch]$Prerelease,
+     [string]$NotesFile
+@@ -16,12 +17,17 @@ function Invoke-Step([string]$label, [scriptblock]$body) {
+     if ($code -ne 0) { throw "$label failed (exit code $code)" }
+ }
+ 
+-$repo = "kua8/Nectar"
++if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $Repository -ieq 'kua8/Nectar') {
++    throw "An Oryvia release repository is required."
++}
++$repo = $Repository
+ $tag = "v$Version"
+ $root = Resolve-Path "$PSScriptRoot/.."
+ Set-Location $root
+ 
+ if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must look like 1.3.1" }
++$updateConfig = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).plugins.updater
++if (-not $updateConfig.pubkey -or -not $updateConfig.endpoints -or ($updateConfig.endpoints | Where-Object { $_ -notlike 'https://*' -or $_ -match '(?i)kua8/Nectar' })) { throw "Configure Oryvia updater endpoint and public key before release builds." }
+ if (-not $env:TAURI_SIGNING_PRIVATE_KEY) { throw "TAURI_SIGNING_PRIVATE_KEY is not set, so the update can't be signed." }
+ 
+ $versionFiles = @{
+@@ -38,18 +44,8 @@ if ($mismatched) {
+     throw "Version files don't match $Version. Run 'bun run bump $Version' and commit before releasing."
+ }
+ 
+-if (-not $DryRun) {
+-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "GitHub CLI not found. Install it with: winget install GitHub.cli, then run: gh auth login" }
+-    $ErrorActionPreference = "Continue"
+-    gh auth status *> $null
+-    $loggedIn = $LASTEXITCODE -eq 0
+-    $ErrorActionPreference = "Stop"
+-    if (-not $loggedIn) { throw "Not logged in to GitHub. Run: gh auth login" }
+-    if (git status --porcelain) { throw "Working tree has uncommitted changes. Commit them first so the tag matches what's built." }
+-}
+-
+ $out = Join-Path $root "release"
+-if (Test-Path $out) { Remove-Item $out -Recurse -Force }
++if (Test-Path -LiteralPath $out) { throw "Release output already exists. Choose a new output directory; existing artifacts are preserved." }
+ New-Item -ItemType Directory $out | Out-Null
+ 
+ if ($NotesFile) {
+@@ -58,7 +54,6 @@ if ($NotesFile) {
+     $notes = (git log -1 --pretty=format:"%b" --no-merges | Out-String).Trim()
+     if (-not $notes) { $notes = (git log -1 --pretty=format:"%s" --no-merges | Out-String).Trim() }
+     $notes = $notes -replace "(?m)^(What's New|Improvements|Changed|Bug Fixes|Other):?\s*$", '### $1'
+-    git fetch --tags --quiet
+     $prev = git tag --sort=-version:refname | Where-Object { $_ -like "v*" -and $_ -ne $tag } | Select-Object -First 1
+     if ($prev) { $notes += "`n`n**Full Changelog**: https://github.com/$repo/compare/$prev...$tag" }
+ }
+@@ -92,6 +87,7 @@ $installerName = "Nectar-Setup-$Version.exe"
+ Copy-Item (Join-Path $root "installer-app/src-tauri/target/release/nectar-installer.exe") (Join-Path $out $installerName)
+ 
+ Copy-Item $setup $out
++Copy-Item "$setup.sig" $out
+ $setupName = Split-Path $setup -Leaf
+ $platform = [ordered]@{
+     signature = (Get-Content "$setup.sig" -Raw).Trim()
+@@ -109,33 +105,11 @@ $manifest = [ordered]@{
+ [IO.File]::WriteAllText((Join-Path $out "latest.json"), ($manifest | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
+ [IO.File]::WriteAllText((Join-Path $out "notes.md"), $notes, (New-Object Text.UTF8Encoding $false))
+ 
+-$assets = @("latest.json", $setupName, $portable, $installerName) | ForEach-Object { Join-Path $out $_ }
++$checksumFiles = Get-ChildItem -LiteralPath $out -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' }
++$checksumLines = $checksumFiles | Sort-Object Name | ForEach-Object { "{0}  {1}" -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name }
++[IO.File]::WriteAllLines((Join-Path $out 'SHA256SUMS.txt'), $checksumLines, (New-Object Text.UTF8Encoding $false))
++$assets = @("latest.json", $setupName, "$setupName.sig", $portable, $installerName, "SHA256SUMS.txt") | ForEach-Object { Join-Path $out $_ }
+ Write-Host "`nBuilt:" -ForegroundColor Green
+ $assets | ForEach-Object { Write-Host ("  {0}  ({1:N1} MB)" -f (Split-Path $_ -Leaf), ((Get-Item $_).Length / 1MB)) }
+ 
+-if ($DryRun) {
+-    Write-Host "`nDry run: nothing was pushed or published. Files are in $out" -ForegroundColor Yellow
+-    return
+-}
+-
+-Invoke-Step "Pushing commit" { git push origin HEAD }
+-
+-$ErrorActionPreference = "Continue"
+-gh release view $tag --repo $repo *> $null
+-$exists = $LASTEXITCODE -eq 0
+-$ErrorActionPreference = "Stop"
+-if ($exists) {
+-    Invoke-Step "Release $tag already exists, replacing its assets" { gh release upload $tag --repo $repo --clobber @assets }
+-} else {
+-    $sha = (git rev-parse HEAD).Trim()
+-    Invoke-Step "Creating draft release $tag" {
+-        gh release create $tag --repo $repo --target $sha --title "Nectar $tag" --notes-file (Join-Path $out "notes.md") --draft @assets
+-    }
+-    if ($Prerelease) {
+-        Invoke-Step "Publishing $tag as a pre-release" { gh release edit $tag --repo $repo --draft=false --prerelease }
+-    } else {
+-        Invoke-Step "Publishing $tag" { gh release edit $tag --repo $repo --draft=false --latest }
+-    }
+-}
+-
+-Write-Host "`nReleased https://github.com/$repo/releases/tag/$tag" -ForegroundColor Green
++Write-Host "Local artifacts prepared. This script never pushes or creates a GitHub Release." -ForegroundColor Yellow
+diff --git a/src-tauri/src/updater.rs b/src-tauri/src/updater.rs
+index 522c7df..4201dd7 100644
+--- a/src-tauri/src/updater.rs
++++ b/src-tauri/src/updater.rs
+@@ -112,6 +112,8 @@ pub fn release_is_old_enough(result: &UpdateCheckResult) -> bool {
+ /// is set. Development builds skip the automatic network check because their
+ /// version never tracks releases; manual checks still work.
+ pub async fn check(app: &AppHandle, force: bool) -> Result<UpdateCheckResult, String> {
++    if !is_installed_copy() { return Ok(UpdateCheckResult::default()); }
++    ensure_update_configuration(app)?;
+     if !force {
+         if let Some(cached) = cached_result(app) {
+             return Ok(cached);
+@@ -170,6 +172,11 @@ pub async fn check(app: &AppHandle, force: bool) -> Result<UpdateCheckResult, St
+ /// launches the NSIS installer and terminates this process, which then
+ /// relaunches the app; on other platforms this returns after restarting.
+ pub async fn install(app: &AppHandle) -> Result<(), String> {
++    if !is_installed_copy() {
++        let _ = app.emit("auto-update-status", serde_json::json!({ "status": "done" }));
++        return Err("Updates require an installed release build".into());
++    }
++    ensure_update_configuration(app)?;
+     if UPDATE_BUSY.swap(true, Ordering::SeqCst) {
+         return Err("an update is already in progress".to_string());
+     }
+@@ -181,6 +188,27 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
+     result
+ }
+ 
++// Adapted from Nectar 1.9.1 is_installed_copy; debug builds are always excluded.
++fn is_installed_copy() -> bool {
++    !cfg!(debug_assertions) && std::env::current_exe().ok()
++        .and_then(|p| p.parent().map(PathBuf::from))
++        .is_some_and(|dir| crate::uninstall_registry::install_scope(&dir).is_some())
++}
++
++fn ensure_update_configuration(app: &AppHandle) -> Result<(), String> {
++    let config = &app.config().plugins.0;
++    let updater = config.get("updater").ok_or("Updater is not configured")?;
++    let key = updater.get("pubkey").and_then(|v| v.as_str()).unwrap_or_default();
++    let endpoints = updater.get("endpoints").and_then(|v| v.as_array());
++    if key.is_empty() || endpoints.is_none_or(|urls| urls.is_empty() || urls.iter().any(|url| {
++        let value = url.as_str().unwrap_or_default();
++        !value.starts_with("https://") || value.to_ascii_lowercase().contains("kua8/nectar")
++    })) {
++        return Err("Configure an Oryvia HTTPS update endpoint and public signing key before enabling updates".into());
++    }
++    Ok(())
++}
++
+ fn installer_scope_args() -> Vec<String> {
+     let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from)) else { return Vec::new() };
+     let Some(all_users) = crate::uninstall_registry::install_scope(&dir) else { return Vec::new() };
+@@ -199,6 +227,7 @@ async fn install_inner(app: &AppHandle) -> Result<(), String> {
+     // Hold the check lock so a concurrent check cannot mutate state mid-install.
+     let _guard = CHECK_LOCK.lock().await;
+ 
++    ensure_update_configuration(app)?;
+     let hook_handle = app.clone();
+     let updater = app
+         .updater_builder()
+@@ -281,7 +310,9 @@ pub async fn run_startup_check(app: AppHandle) {
+         return;
+     }
+ 
+-    if auto_update && release_is_old_enough(&result) && install_needs_unavailable_elevation() {
++    if auto_update && release_is_old_enough(&result) && !is_installed_copy() {
++        let _ = app.emit("auto-update-status", serde_json::json!({ "status": "done" }));
++    } else if auto_update && release_is_old_enough(&result) && install_needs_unavailable_elevation() {
+         crate::diagnostics::log("auto-update: skipping silent install, all-users install needs elevation this process doesn't have; leaving update available for manual install");
+         let _ = app.emit("auto-update-status", serde_json::json!({ "status": "done" }));
+     } else if auto_update && release_is_old_enough(&result) {
+diff --git a/src-tauri/tauri.conf.json b/src-tauri/tauri.conf.json
+index fed07a8..9b2bd78 100644
+--- a/src-tauri/tauri.conf.json
++++ b/src-tauri/tauri.conf.json
+@@ -140,7 +140,8 @@
+         "installerIcon": "icons/icon.ico",
+         "uninstallerIcon": "icons/icon.ico",
+         "installerHooks": "../installer/build/installer.nsh"
+-      }
++      },
++      "allowDowngrades": false
+     }
+   },
+   "plugins": {
+@@ -149,10 +150,8 @@
+       "windows": {
+         "installMode": "quiet"
+       },
+-      "endpoints": [
+-        "https://github.com/kua8/Nectar/releases/latest/download/latest.json"
+-      ],
+-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY2QTJCRjEzRjIxNkI5NkEKUldScXVSYnlFNytpWm0ycmxwTVVUeDdxMjVPdHBzNGJHcm1LT2RFVWVNOC9zd3Y1bHpLM1BwWFIK"
++      "endpoints": [],
++      "pubkey": ""
+     }
+   }
+ }
+diff --git a/tests/migration.test.mjs b/tests/migration.test.mjs
+new file mode 100644
+index 0000000..b2ee2ac
+--- /dev/null
++++ b/tests/migration.test.mjs
+@@ -0,0 +1,63 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
++const read = p => fs.readFileSync(path.join(root,p),'utf8');
++const json = p => JSON.parse(read(p));
++
++test('custom installer geometry and animation are retained', () => {
++  const window = json('installer-app/src-tauri/tauri.conf.json').app.windows[0];
++  assert.equal(window.width,620); assert.equal(window.height,560);
++  const app = read('installer-app/src/App.tsx');
++  for(const screen of ['welcome','options','installing','finish']) assert.ok(app.includes(`"${screen}"`));
++  assert.ok(app.includes('screenVariants'));
++});
++test('updater uses v2 signature pipeline and existing concurrency control', () => {
++  const updater = read('src-tauri/src/updater.rs');
++  for(const fragment of ['CHECK_LOCK.lock().await','UPDATE_BUSY.swap','download_and_install','is_installed_copy','install_needs_unavailable_elevation','ensure_update_configuration']) assert.ok(updater.includes(fragment),fragment);
++  assert.ok(!updater.includes('RELEASES_API'));
++  const cfg=json('src-tauri/tauri.conf.json');
++  assert.deepEqual(cfg.plugins.updater.endpoints,[]);
++  assert.equal(cfg.plugins.updater.pubkey,'');
++  assert.equal(cfg.bundle.windows.allowDowngrades,false);
++  assert.equal(cfg.bundle.createUpdaterArtifacts,true);
++});
++test('uninstall paths share conservative file deletion and have no recursive fallback', () => {
++  for(const file of ['installer-app/src-tauri/src/uninstall.rs','src-tauri/src/native_uninstall.rs']) {
++    const s=read(file);
++    assert.ok(s.includes('install_safety::remove_app_files_command'));
++    for(const forbidden of ['-Recurse','rd /s','cmd /c','IMAGENAME eq','/IM']) assert.ok(!s.includes(forbidden),`${file}: ${forbidden}`);
++  }
++  const shared=read('install_safety.rs').split('#[cfg(test)]')[0];
++  assert.ok(!shared.includes('contains("nectar")'));
++  assert.ok(shared.includes('ReparsePoint'));
++  assert.ok(shared.includes('PSIsContainer'));
++});
++test('NSIS does not restore a stale uninstaller from shared TEMP', () => {
++  const hooks=read('installer/build/installer.nsh');
++  assert.ok(!hooks.includes('nectar-uninstall.keep'));
++  assert.ok(!hooks.includes('${GetSize}'));
++  assert.ok(hooks.includes('${MAINBINARYNAME}.exe$\\" --uninstall'));
++  assert.ok(hooks.includes('QuietUninstallString'));
++  const registry=read('installer-app/src-tauri/src/registry.rs');
++  const native=read('src-tauri/src/uninstall_registry.rs');
++  const customKey=registry.match(/Uninstall\\([^"\n]+)/)[1];
++  const nativeKey=native.match(/Uninstall\\([^"\n]+)/)[1];
++  assert.equal(customKey,nativeKey);
++  assert.equal(customKey.toLowerCase(),json('src-tauri/tauri.conf.json').productName.toLowerCase());
++});
++test('payload is limited to the single owned executable', () => {
++  const source=read('installer-app/src-tauri/src/payload.rs');
++  assert.ok(source.includes('archive.len() != 1'));
++  assert.ok(source.includes('entry.unix_mode()'));
++  assert.ok(source.includes('validate_dir(dest)'));
++});
++test('release preparation cannot publish or delete existing releases', () => {
++  const release=read('scripts/release.ps1');
++  for(const forbidden of ['git push','gh release','Remove-Item $out -Recurse']) assert.ok(!release.includes(forbidden));
++  assert.ok(release.includes('SHA256SUMS.txt'));
++  assert.ok(release.includes('Copy-Item "$setup.sig" $out'));
++  assert.ok(!read('.github/workflows/release.yml').includes('contents: write'));
++});

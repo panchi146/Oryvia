@@ -1,0 +1,31 @@
+{
+  "protectedFiles": 133,
+  "protectedHashCheck": "PASS",
+  "installerHeadingOnly": "PASS",
+  "patchApply": "PASS",
+  "codeFiles": [
+    ".github/workflows/release.yml",
+    "installer/build/cleanup.ps1",
+    "installer/build/installer.nsh",
+    "installer/build/ownership.ps1",
+    "installer-app/src/App.tsx",
+    "installer-app/src-tauri/src/commands.rs",
+    "installer-app/src-tauri/src/registry.rs",
+    "installer-app/src-tauri/src/uninstall.rs",
+    "install_safety.rs",
+    "src/i18n/native-uninstall.json",
+    "src/i18n/translations.ts",
+    "src/settings/AboutTab.tsx",
+    "src/settings/useSettings.ts",
+    "src/updater.ts",
+    "src-tauri/src/main.rs",
+    "src-tauri/src/native_uninstall.rs",
+    "src-tauri/src/uninstall_registry.rs",
+    "src-tauri/src/updater.rs",
+    "src-tauri/src/update_policy.rs",
+    "tests/install-safety.test.mjs",
+    "tests/install-safety.test.ps1",
+    "tests/migration.test.mjs",
+    "tests/updater-local.test.mjs"
+  ]
+}
