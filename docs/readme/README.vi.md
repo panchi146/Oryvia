@@ -16,7 +16,7 @@
 
 [![Giấy phép](https://img.shields.io/badge/gi%E1%BA%A5y%20ph%C3%A9p-GPL--3.0--only-blue.svg)](../../LICENSE)
 ![Nền tảng](https://img.shields.io/badge/n%E1%BB%81n%20t%E1%BA%A3ng-Windows%2010%20%2F%2011-0078D6?logo=windows&logoColor=white)
-[![Phiên bản](https://img.shields.io/badge/phi%C3%AAn%20b%E1%BA%A3n-1.0.0-green.svg)](https://github.com/panchi146/Oryvia/releases)
+[![Phiên bản](https://img.shields.io/badge/phi%C3%AAn%20b%E1%BA%A3n-1.0.1-green.svg)](https://github.com/panchi146/Oryvia/releases)
 
 [**Tải về**](https://github.com/panchi146/Oryvia/releases) &nbsp;·&nbsp; [Tính năng](#tính-năng) &nbsp;·&nbsp; [Dynamic Island](#dynamic-island-the-notch) &nbsp;·&nbsp; [Thanh Dock](#thanh-dock-the-dock) &nbsp;·&nbsp; [Đa màn hình](#đa-màn-hình) &nbsp;·&nbsp; [Cài đặt](../guides/SETTINGS.md) &nbsp;·&nbsp; [Biên dịch từ nguồn](#biên-dịch-từ-mã-nguồn)
 
@@ -50,10 +50,10 @@ Một chiếc notch tại mép trên màn hình tự động thích ứng với 
 
 | Chế độ | Chức năng chi tiết |
 | --- | --- |
-| **Âm nhạc (Music)** | Ảnh bìa album, thông tin bài hát, nút điều khiển phát nhạc và hiệu ứng sóng âm phản hồi 5 dải tần số. |
-| **Trung tâm điều khiển (Command Center)** | Wi-Fi, Bluetooth, Không làm phiền, âm lượng và độ sáng màn hình không cần mở Windows Settings, kèm thanh Shortcuts ghim ứng dụng. |
-| **Trạng thái (Status)** | Chỉ báo pin (tự ẩn trên máy tính bàn cắm điện) và thời tiết, thông số phần cứng theo bố cục bạn chọn. |
-| **Lịch (Calendar)** | Lịch tháng tích hợp đồng hồ đếm ngược Pomodoro tập trung và đồng hồ bấm giờ có ghi vòng (laps). |
+| **Âm nhạc (Music)** | Ảnh bìa album, thông tin bài hát, nút chọn đầu ra âm thanh, nút tắt tiếng (mute) và hiệu ứng sóng âm phản hồi 5 dải tần số. |
+| **Trung tâm điều khiển (Command Center)** | Wi-Fi & Bluetooth với bảng chi tiết quét mạng/thiết bị, Không làm phiền, âm lượng, độ sáng và Shortcuts Bar. |
+| **Trạng thái (Status)** | Chỉ báo pin (tự ẩn trên máy tính bàn), thời tiết và tùy chọn Đồng hồ kép (Dual Clock) theo múi giờ bạn chọn. |
+| **Lịch (Calendar)** | Lịch tháng tích hợp đồng hồ Pomodoro (đồng bộ sleep/resume thời gian thực) và đồng hồ bấm giờ (laps). |
 
 Chiều rộng, chiều cao, bo góc và vị trí đều chuyển động trên spring physics riêng, tạo cảm giác mượt mà và tự nhiên.
 
@@ -108,14 +108,13 @@ Các màn hình phụ được tạo cửa sổ riêng, do đó chế độ **T�
 ## Cài đặt
 
 1. Tải về từ trang [Releases chính thức](https://github.com/panchi146/Oryvia/releases):
-   - **Bản cài đặt Custom Setup (Khuyến nghị):** `Oryvia-Setup-1.0.0.exe` — giao diện đồ họa hiện đại, chọn cài **Chỉ cho tôi** hoặc **Tất cả người dùng** (hỏi quyền Administrator một lần), có cơ chế giao dịch rollback tự động chống lỗi.
-   - **Bản Portable:** `oryvia-1.0.0-portable-windows-x64.zip` — giải nén và chạy ngay `oryvia.exe`, không can thiệp registry hệ thống.
+   - **Bản cài đặt Custom Setup (Khuyến nghị):** `Oryvia-Setup-1.0.1.exe` — giao diện đồ họa hiện đại, chọn cài **Chỉ cho tôi** hoặc **Tất cả người dùng** (hỏi quyền Administrator một lần), có cơ chế giao dịch rollback tự động và tính năng gửi góp ý khi gỡ cài đặt.
 2. Chọn **Chỉ cho tôi** hoặc **Tất cả người dùng**. Bản cài đặt cho tất cả người dùng sẽ yêu cầu quyền Quản trị viên một lần.
 3. Oryvia khởi động với hoạt ảnh ngắn, sau đó Notch và Dock sẽ xuất hiện đồng thời.
 
-Oryvia tự động cập nhật: chấm màu xanh trên notch báo hiệu có bản cập nhật mới sẵn sàng, và bạn có thể bật **Tự động cập nhật** trong **Cài đặt › Về Oryvia** (sử dụng Tauri Updater v2 với các gói NSIS đã ký Minisign). Các tệp thực thi review hiện tại chưa đăng ký chứng chỉ thương mại Authenticode (`NotSigned`).
+Oryvia hỗ trợ tự động cập nhật qua Tauri Updater v2 với các gói NSIS đã ký Minisign (`Oryvia_1.0.1_x64-setup.exe.sig`). Các tệp thực thi review hiện tại chưa đăng ký chứng chỉ thương mại Authenticode (`NotSigned`). Lưu ý: Luồng cập nhật OTA trực tuyến (1.0.0 → 1.0.1) đang trong giai đoạn thử nghiệm; khuyến nghị cài đặt hoặc nâng cấp trực tiếp qua `Oryvia-Setup-1.0.1.exe`.
 
-**Gỡ cài đặt** từ Windows Settings › Apps, hoặc từ nút trong **Cài đặt › Về Oryvia**. Cả hai cách đều gỡ sạch ứng dụng, khôi phục thanh taskbar gốc nguyên vẹn và bảo toàn các tệp cấu hình cá nhân.
+**Gỡ cài đặt** từ Windows Settings › Apps, hoặc từ nút trong **Cài đặt › Về Oryvia**. Cả hai cách đều gỡ sạch ứng dụng, khôi phục thanh taskbar gốc nguyên vẹn và cung cấp hộp thoại gửi phản hồi tự động mở trang issue GitHub trên trình duyệt.
 
 ## Biên dịch từ mã nguồn
 

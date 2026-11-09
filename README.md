@@ -16,7 +16,7 @@
 
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6?logo=windows&logoColor=white)
-[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/panchi146/Oryvia/releases)
+[![Version](https://img.shields.io/badge/version-1.0.1-green.svg)](https://github.com/panchi146/Oryvia/releases)
 
 [**Download**](https://github.com/panchi146/Oryvia/releases) &nbsp;·&nbsp; [Features](#features) &nbsp;·&nbsp; [The Notch](#the-notch) &nbsp;·&nbsp; [The Dock](#the-dock) &nbsp;·&nbsp; [Multiple monitors](#multiple-monitors) &nbsp;·&nbsp; [Settings](docs/guides/SETTINGS.md) &nbsp;·&nbsp; [Build from source](#build-from-source)
 
@@ -50,10 +50,10 @@ A notch at the top of your screen that adapts to what you're doing. Scroll or sw
 
 | Mode | What it does |
 | --- | --- |
-| **Music** | Album art, track info, playback controls, and a visualizer that reacts to five frequency bands. |
-| **Command Center** | Wi-Fi, Bluetooth, Do Not Disturb, volume, and brightness without opening Windows Settings, plus a quick Shortcuts Bar. |
-| **Status** | Battery (hidden automatically on desktops without one) and weather, in a layout you choose. |
-| **Calendar** | A month view with a built-in Pomodoro timer and stopwatch with laps. |
+| **Music** | Album art, track info, playback controls, audio output picker, mute toggle, and a visualizer that reacts to five frequency bands. |
+| **Command Center** | Wi-Fi & Bluetooth with dedicated detail views and device discovery, Do Not Disturb, volume, brightness, and a Shortcuts Bar. |
+| **Status** | Battery (hidden automatically on desktops without one), weather, and optional Dual Clock with secondary timezone. |
+| **Calendar** | A month view with a built-in Pomodoro timer (real-time sleep/resume sync) and stopwatch with laps. |
 
 Width, height, corner radius, and position each animate on their own spring, so every transition feels physical.
 
@@ -108,14 +108,13 @@ Extra monitors get their own windows, so **All Monitors** uses somewhat more CPU
 ## Install
 
 1. Download from the [releases page](https://github.com/panchi146/Oryvia/releases):
-   - **Custom Setup (Recommended):** `Oryvia-Setup-1.0.0.exe` — graphical installer featuring per-user / all-users installation and transactional rollback safety.
-   - **Portable Edition:** `oryvia-1.0.0-portable-windows-x64.zip` — extract and run `oryvia.exe` directly without touching the registry.
+   - **Custom Setup (Recommended):** `Oryvia-Setup-1.0.1.exe` — graphical installer featuring per-user / all-users installation, transactional rollback safety, and an uninstall feedback prompt.
 2. Choose **Just me** or **All users**. An all-users install asks for administrator permission once.
 3. Oryvia starts with a short splash animation, then the notch and dock appear together.
 
-Oryvia updates itself: a green dot on the notch means an update is ready, and you can turn on **Auto Update** in **Settings › About** (powered by Tauri Updater v2 with Minisign-signed NSIS packages). Current review binaries are open-source and unsigned with commercial Authenticode (`NotSigned`).
+Oryvia supports auto-updates via Tauri Updater v2 with Minisign-signed NSIS packages (`Oryvia_1.0.1_x64-setup.exe.sig`). Current binaries are open-source and not signed with commercial Authenticode (`NotSigned`). Note: The live online update stream (1.0.0 → 1.0.1) has not yet been runtime verified on end-user hardware; manual installation or upgrade via `Oryvia-Setup-1.0.1.exe` is recommended.
 
-**Uninstall** from Windows Settings › Apps, or from **Settings › About** inside Oryvia. Both remove the app and put your native taskbar back safely.
+**Uninstall** from Windows Settings › Apps, or from **Settings › About** inside Oryvia. Both remove the app and restore your native taskbar safely, with an optional feedback dialog opening a pre-filled GitHub issue in your browser.
 
 ## Build from source
 

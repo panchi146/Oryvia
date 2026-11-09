@@ -2,12 +2,12 @@
 
 ## 1. Supported Versions
 
-Oryvia receives security updates and vulnerability triage on the active release branch:
+Only the latest release of Oryvia receives security fixes.
 
-| Version | Supported | Notes |
-| :--- | :---: | :--- |
-| **1.0.0** | :white_check_mark: | Initial production release. Live online self-updates (N → N+1) are planned for live verification with the 1.0.1 release. |
-| < 1.0.0 / Upstream forks | :x: | Historical releases or upstream Nectar/Bloom baselines are not maintained in this repository. |
+| Version | Supported |
+| --- | --- |
+| Latest release | ✅ |
+| Older releases | ❌ |
 
 ---
 
