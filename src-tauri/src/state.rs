@@ -1,4 +1,4 @@
-use std::sync::{atomic::{AtomicBool, AtomicU32, AtomicI64}, Mutex, OnceLock};
+﻿use std::sync::{atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicI64}, Mutex, OnceLock};
 use std::sync::mpsc::Sender;
 use std::collections::HashMap;
 use crate::types::{SystemCommand, IntRect, AppInfo};
@@ -11,6 +11,8 @@ pub static NATIVE_TASKBAR_HIDDEN: AtomicBool = AtomicBool::new(false);
 pub static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// This launch follows a restart or a crash, so calendars should sync right away.
 pub static RELAUNCHED: AtomicBool = AtomicBool::new(false);
+pub static KEYBOARD_FOCUS_LABEL: Mutex<Option<String>> = Mutex::new(None);
+pub static KEYBOARD_FOCUS_SEQ: AtomicU64 = AtomicU64::new(0);
 
 macro_rules! label_map {
     ($fn_name:ident, $val_ty:ty) => {

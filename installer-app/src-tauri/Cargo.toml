@@ -1,6 +1,6 @@
 [package]
 name = "oryvia-installer"
-version = "1.0.0"
+version = "1.0.1"
 description = "Oryvia custom installer, derived from Nectar"
 authors = ["Panchi146", "kua8 and contributors (upstream Nectar)"]
 edition = "2021"

@@ -208,7 +208,7 @@ export function CompactMediaPlayer({
           </AnimatePresence>
         </div>
         <div className="cmp-track">
-          <TitleMarquee title={mediaInfo.title} />
+          <TitleMarquee title={mediaInfo.title || t("notch.music.noMedia")} />
           <span className="cmp-artist">{mediaInfo.artist}</span>
         </div>
         <div className="cmp-visualizer">
@@ -250,7 +250,9 @@ export function CompactMediaPlayer({
           className="cmp-btn cmp-btn-side"
           onClick={(e) => { e.stopPropagation(); onVolumeExpandedChange(!volumeExpanded); }}
           whileTap={{ scale: 0.9 }}
-          data-tooltip={t("notch.music.volume")}
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          aria-label={t("notch.music.volume")}
         >
           <SpeakerIcon size={22} muted={volume === 0} />
         </motion.button>
@@ -290,12 +292,16 @@ export function CompactMediaPlayer({
           className="cmp-btn cmp-btn-side"
           onClick={(e) => {
             e.stopPropagation();
-            invoke('open_sound_settings').catch(() => {});
+            invoke('open_audio_output_picker').catch(() => {
+              invoke('open_sound_settings').catch(() => {});
+            });
           }}
           whileTap={{ scale: 0.9 }}
-          data-tooltip={t("notch.music.audioOutput")}
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          aria-label={t("notch.music.audioOutput")}
         >
-          <AudioOutputIcon size={22} />
+          <AudioOutputIcon size={20} />
         </motion.button>
       </div>
 

@@ -1,4 +1,4 @@
-import { StrictMode, useState, useEffect } from "react";
+﻿import { StrictMode, useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Effect, EffectState } from "@tauri-apps/api/window";
@@ -148,6 +148,10 @@ function SettingsApp() {
               toggleTimerSound={settings.toggleTimerSound}
               stopwatchEnabled={settings.stopwatchEnabled}
               toggleStopwatchEnabled={settings.toggleStopwatchEnabled}
+              dualClockEnabled={settings.dualClockEnabled}
+              toggleDualClockEnabled={settings.toggleDualClockEnabled}
+              dualClockTimezone={settings.dualClockTimezone}
+              handleDualClockTimezoneChange={settings.handleDualClockTimezoneChange}
               musicModeEnabled={settings.musicModeEnabled}
               toggleMusicMode={settings.toggleMusicMode}
               musicCompactNotch={settings.musicCompactNotch}
@@ -171,6 +175,11 @@ function SettingsApp() {
               handleCityClear={settings.handleCityClear}
               statusWidgets={settings.statusWidgets}
               handleWidgetsChange={settings.handleWidgetsChange}
+              panelOrderMode={settings.panelOrderMode}
+              panelOrder={settings.panelOrder}
+              handlePanelOrderModeChange={settings.handlePanelOrderModeChange}
+              handlePanelOrderChange={settings.handlePanelOrderChange}
+              resetPanelOrder={settings.resetPanelOrder}
               hasBattery={settings.hasBattery}
               notchExpandOnHover={settings.notchExpandOnHover}
               toggleNotchExpandOnHover={settings.toggleNotchExpandOnHover}

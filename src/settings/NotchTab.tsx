@@ -26,12 +26,15 @@ import {
   Zap,
   RotateCcw,
   Check,
+  Globe,
 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { Dropdown } from "./Dropdown";
 import { useCaldav } from "../hooks/useCaldav";
 import { StatusWidgetConfig } from "../components/StatusWidgetConfig";
-import type { WidgetConfig, MonitorInfo, MonitorMode } from "./types";
+import { PanelOrderConfig } from "../components/PanelOrderConfig";
+import { TIMEZONE_OPTIONS } from "../components/DualClock";
+import type { WidgetConfig, MonitorInfo, MonitorMode, NectarPanel, PanelOrderMode } from "./types";
 import { usePerMonitor } from "./usePerMonitor";
 import { usePopoverPosition } from "./usePopoverPosition";
 import { useI18n } from "../i18n";
@@ -55,6 +58,10 @@ interface NotchTabProps {
   toggleTimerSound: () => void;
   stopwatchEnabled: boolean;
   toggleStopwatchEnabled: () => void;
+  dualClockEnabled: boolean;
+  toggleDualClockEnabled: () => void;
+  dualClockTimezone: string;
+  handleDualClockTimezoneChange: (tz: string) => void;
   musicModeEnabled: boolean;
   toggleMusicMode: () => void;
   musicCompactNotch: boolean;
@@ -78,6 +85,11 @@ interface NotchTabProps {
   handleCityClear: () => void;
   statusWidgets: WidgetConfig;
   handleWidgetsChange: (config: WidgetConfig) => void;
+  panelOrderMode: PanelOrderMode;
+  panelOrder: NectarPanel[];
+  handlePanelOrderModeChange: (mode: PanelOrderMode) => void;
+  handlePanelOrderChange: (order: NectarPanel[]) => void;
+  resetPanelOrder: () => void;
   hasBattery: boolean;
   onOpenCalendarSync: () => void;
   notchExpandOnHover: boolean;
@@ -120,6 +132,10 @@ export function NotchTab({
   toggleTimerSound,
   stopwatchEnabled,
   toggleStopwatchEnabled,
+  dualClockEnabled,
+  toggleDualClockEnabled,
+  dualClockTimezone,
+  handleDualClockTimezoneChange,
   musicModeEnabled,
   toggleMusicMode,
   musicCompactNotch,
@@ -143,6 +159,11 @@ export function NotchTab({
   handleCityClear,
   statusWidgets,
   handleWidgetsChange,
+  panelOrderMode,
+  panelOrder,
+  handlePanelOrderModeChange,
+  handlePanelOrderChange,
+  resetPanelOrder,
   hasBattery,
   onOpenCalendarSync,
   notchExpandOnHover,
@@ -165,7 +186,7 @@ export function NotchTab({
   toggleNotchReduceMotion,
   resetNotchInteractionSettings,
 }: NotchTabProps) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [resetFeedback, setResetFeedback] = useState(false);
   const caldav = useCaldav();
   const sources = (caldav.account ? 1 : 0) + caldav.links.length;
@@ -314,16 +335,18 @@ export function NotchTab({
         </SettingRow>
 
         {timerEnabled && (
-          <SettingRow
-            icon={BellRing}
-            label={t("settings.notch.timerSound.label")}
-            desc={t("settings.notch.timerSound.desc")}
-          >
-            <label className="toggle-switch">
-              <input type="checkbox" checked={timerSoundEnabled} onChange={toggleTimerSound} />
-              <span className="slider"></span>
-            </label>
-          </SettingRow>
+          <>
+            <SettingRow
+              icon={BellRing}
+              label={t("settings.notch.timerSound.label")}
+              desc={t("settings.notch.timerSound.desc")}
+            >
+              <label className="toggle-switch">
+                <input type="checkbox" checked={timerSoundEnabled} onChange={toggleTimerSound} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+          </>
         )}
 
         <SettingRow
@@ -336,6 +359,34 @@ export function NotchTab({
             <span className="slider"></span>
           </label>
         </SettingRow>
+
+        <SettingRow
+          icon={Globe}
+          label={t("settings.notch.dualClock.label")}
+          desc={t("settings.notch.dualClock.desc")}
+        >
+          <label className="toggle-switch">
+            <input type="checkbox" checked={dualClockEnabled} onChange={toggleDualClockEnabled} />
+            <span className="slider"></span>
+          </label>
+        </SettingRow>
+
+        {dualClockEnabled && (
+          <SettingRow
+            icon={Clock}
+            label={t("settings.notch.dualClockTimezone.label")}
+            desc={t("settings.notch.dualClockTimezone.desc")}
+          >
+            <Dropdown
+              value={dualClockTimezone}
+              onChange={handleDualClockTimezoneChange}
+              options={TIMEZONE_OPTIONS.map((opt) => ({
+                value: opt.value,
+                label: language === "vi" ? opt.labelVi : opt.labelEn,
+              }))}
+            />
+          </SettingRow>
+        )}
 
         <SettingRow
           icon={Music}
@@ -485,6 +536,17 @@ export function NotchTab({
       <div className="setting-group-label">{t("settings.notch.group.widgets")}</div>
       <div className="setting-group">
         <StatusWidgetConfig value={statusWidgets} onChange={handleWidgetsChange} hasBattery={hasBattery} />
+      </div>
+
+      <div className="setting-group-label">{t("settings.notch.group.panelOrder")}</div>
+      <div className="setting-group">
+        <PanelOrderConfig
+          mode={panelOrderMode}
+          order={panelOrder}
+          onModeChange={handlePanelOrderModeChange}
+          onOrderChange={handlePanelOrderChange}
+          onReset={resetPanelOrder}
+        />
       </div>
 
       <div className="setting-group-label">{t("settings.notch.group.interaction")}</div>

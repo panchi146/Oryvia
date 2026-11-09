@@ -1,4 +1,4 @@
-use windows::Win32::Foundation::{HWND, HGLOBAL};
+﻿use windows::Win32::Foundation::{HWND, HGLOBAL};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL, IPersistFile, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::Com::StructuredStorage::{CreateStreamOnHGlobal, GetHGlobalFromStream};
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
@@ -514,7 +514,9 @@ pub fn re_assert_topmost(hwnd: HWND) {
         };
         // Re-stamp NOACTIVATE + TOOLWINDOW first
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as usize;
-        let new_ex = ex | WS_EX_NOACTIVATE.0 as usize | WS_EX_TOOLWINDOW.0 as usize;
+        let keep_focusable = crate::state::KEYBOARD_FOCUS_LABEL.lock().ok().is_some_and(|l| l.is_some());
+        let noactivate = if keep_focusable { 0 } else { WS_EX_NOACTIVATE.0 as usize };
+        let new_ex = ex | noactivate | WS_EX_TOOLWINDOW.0 as usize;
         if ex != new_ex {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex as isize);
         }

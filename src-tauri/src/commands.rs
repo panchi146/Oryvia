@@ -20,6 +20,52 @@ pub async fn set_menu_open(open: bool, rect: Option<IntRect>) {
 }
 
 #[tauri::command]
+pub fn set_window_keyboard_focus(window: Window, enabled: bool, seq: Option<u64>) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetForegroundWindow, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+    };
+    if let Some(s) = seq {
+        let mut current = crate::state::KEYBOARD_FOCUS_SEQ.load(Ordering::SeqCst);
+        loop {
+            if s < current {
+                return;
+            }
+            match crate::state::KEYBOARD_FOCUS_SEQ.compare_exchange_weak(
+                current,
+                s,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
+    } else {
+        crate::state::KEYBOARD_FOCUS_SEQ.fetch_add(1, Ordering::SeqCst);
+    }
+    if let Ok(mut label) = crate::state::KEYBOARD_FOCUS_LABEL.lock() {
+        if enabled {
+            *label = Some(window.label().to_string());
+        } else if label.as_deref() == Some(window.label()) {
+            *label = None;
+        }
+    }
+    let Ok(hwnd) = window.hwnd() else { return };
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as usize;
+        let noactivate = WS_EX_NOACTIVATE.0 as usize;
+        if enabled {
+            if (ex & noactivate) != 0 {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex & !noactivate) as isize);
+            }
+            let _ = SetForegroundWindow(hwnd);
+        } else if (ex & noactivate) == 0 {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex | noactivate) as isize);
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn set_dock_hovered(window: Window, hovered: bool) {
     crate::state::set_flag(crate::state::dock_hovered(), window.label(), hovered);
 }
@@ -2346,6 +2392,178 @@ pub fn open_sound_settings() {
     }
 }
 
+static LAST_AUDIO_PICKER_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// Query Windows build number via Win32 Registry API without spawning child processes.
+pub fn get_windows_build_number() -> u32 {
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ,
+    };
+    unsafe {
+        let subkey = windows::core::w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
+        let val_name = windows::core::w!("CurrentBuildNumber");
+        let mut hkey = windows::Win32::System::Registry::HKEY::default();
+        if RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey, Some(0), KEY_READ, &mut hkey).is_ok() {
+            let mut value_type = REG_SZ;
+            let mut buffer = [0u8; 128];
+            let mut value_size = buffer.len() as u32;
+            if RegQueryValueExW(
+                hkey,
+                val_name,
+                None,
+                Some(&mut value_type),
+                Some(buffer.as_mut_ptr()),
+                Some(&mut value_size),
+            )
+            .is_ok()
+            {
+                let _ = RegCloseKey(hkey);
+                if value_size >= 2 {
+                    let u16_len = value_size as usize / 2;
+                    let slice = std::slice::from_raw_parts(buffer.as_ptr() as *const u16, u16_len);
+                    let s = String::from_utf16_lossy(slice);
+                    if let Ok(build) = s.trim_matches('\0').trim().parse::<u32>() {
+                        return build;
+                    }
+                }
+            } else {
+                let _ = RegCloseKey(hkey);
+            }
+        }
+        0
+    }
+}
+
+/// Returns true if the host OS is Windows 11 or greater (build >= 22000).
+pub fn is_windows_11_or_greater() -> bool {
+    static IS_WIN11: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *IS_WIN11.get_or_init(|| {
+        let build = get_windows_build_number();
+        build >= 22000
+    })
+}
+
+/// Simulates Win + Ctrl + V using documented Windows SendInput API.
+/// Safely manages modifier states and guarantees all keys are released.
+pub fn trigger_win_ctrl_v() -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, SendInput, INPUT, INPUT_0, KEYBDINPUT,
+        VK_CONTROL, VK_LWIN, VK_MENU, VK_SHIFT, VK_V, KEYEVENTF_KEYUP,
+    };
+
+    let key_down = |vk| INPUT {
+        r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: Default::default(),
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+
+    let key_up = |vk| INPUT {
+        r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: KEYEVENTF_KEYUP,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+
+    unsafe {
+        // If Shift or Alt are physically held down, release them temporarily
+        // so the system hotkey Win + Ctrl + V registers cleanly without modifier pollution.
+        let shift_down = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
+        let menu_down = (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0;
+
+        let mut pre_inputs = Vec::with_capacity(2);
+        if shift_down {
+            pre_inputs.push(key_up(VK_SHIFT));
+        }
+        if menu_down {
+            pre_inputs.push(key_up(VK_MENU));
+        }
+        if !pre_inputs.is_empty() {
+            let sent = SendInput(&pre_inputs, std::mem::size_of::<INPUT>() as i32);
+            if sent == 0 {
+                return Err("Failed to release conflicting modifier keys".to_string());
+            }
+        }
+
+        // Send KeyDown sequence: Win, Ctrl, V
+        let down_inputs = [key_down(VK_LWIN), key_down(VK_CONTROL), key_down(VK_V)];
+        let sent_down = SendInput(&down_inputs, std::mem::size_of::<INPUT>() as i32);
+
+        // Small hold so Windows Explorer's hotkey handler reliably captures the chord
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        // Always send KeyUp sequence in reverse order: V, Ctrl, Win to guarantee no stuck keys
+        let up_inputs = [key_up(VK_V), key_up(VK_CONTROL), key_up(VK_LWIN)];
+        let sent_up = SendInput(&up_inputs, std::mem::size_of::<INPUT>() as i32);
+
+        // Restore user physical modifier states if they were held
+        let mut post_inputs = Vec::with_capacity(2);
+        if menu_down {
+            post_inputs.push(key_down(VK_MENU));
+        }
+        if shift_down {
+            post_inputs.push(key_down(VK_SHIFT));
+        }
+        if !post_inputs.is_empty() {
+            let _ = SendInput(&post_inputs, std::mem::size_of::<INPUT>() as i32);
+        }
+
+        if sent_down != down_inputs.len() as u32 || sent_up != up_inputs.len() as u32 {
+            return Err(format!(
+                "SendInput incomplete: sent {}/{} down, {}/{} up",
+                sent_down,
+                down_inputs.len(),
+                sent_up,
+                up_inputs.len()
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+/// Invokes Windows 11 Native Sound Output flyout (Win + Ctrl + V).
+/// Automatically falls back to standard Sound Settings (ms-settings:sound) on error or older OS.
+#[tauri::command]
+pub async fn open_audio_output_picker() -> Result<(), String> {
+    let now = get_now_ms();
+    if now - LAST_AUDIO_PICKER_MS.load(Ordering::Relaxed) < 300 {
+        return Ok(());
+    }
+    LAST_AUDIO_PICKER_MS.store(now, Ordering::Relaxed);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        // Fallback for Windows 10 and older where Win+Ctrl+V is not the sound output flyout
+        if !is_windows_11_or_greater() {
+            open_sound_settings();
+            return Ok(());
+        }
+
+        match trigger_win_ctrl_v() {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                eprintln!("[AudioOutputPicker] SendInput failed: {e}; falling back to sound settings");
+                open_sound_settings();
+                Err(e)
+            }
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub fn open_notification_center(app: AppHandle) {
     crate::services::force_main_click_through(&app);
@@ -4382,5 +4600,16 @@ mod pwa_icon_tests {
             args: None,
         };
         assert!(is_same_app_info(&win32_shortcut, &win32_running));
+    }
+
+    #[test]
+    fn test_windows_build_and_audio_picker() {
+        let build = get_windows_build_number();
+        #[cfg(target_os = "windows")]
+        {
+            assert!(build > 0, "Windows build number should be non-zero");
+            let is_win11 = is_windows_11_or_greater();
+            assert_eq!(is_win11, build >= 22000);
+        }
     }
 }

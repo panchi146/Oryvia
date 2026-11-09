@@ -35,6 +35,17 @@ export function useSettingsSync(
       "settings-changed",
       (event) => {
         const { key, value } = event.payload;
+
+        if (value !== null && value !== undefined) {
+          try {
+            localStorage.setItem(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+          } catch {}
+        } else {
+          try {
+            localStorage.removeItem(key);
+          } catch {}
+        }
+
         const handler = handlersRef.current[key];
         if (handler && value !== null && value !== undefined) {
           handler(convertSettingValue(value));
@@ -64,6 +75,5 @@ export function useSettingsSync(
       unlistenSC.then((fn) => fn());
       unlistenSEC.then((fn) => fn());
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps ?? []);
 }

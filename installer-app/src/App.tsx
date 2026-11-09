@@ -18,6 +18,13 @@ import {
   onInstallProgress,
   onUninstallProgress,
 } from "./lib/api";
+import {
+  FEEDBACK_ENDPOINT,
+  FEEDBACK_REASONS,
+  buildFeedbackUrl,
+  getInstallerLanguage,
+  FEEDBACK_I18N,
+} from "./lib/feedback";
 
 type Screen =
   | "loading"
@@ -29,15 +36,6 @@ type Screen =
   | "uninstalling"
   | "uninstall-done"
   | "error";
-
-// Configure an Oryvia issue endpoint before enabling this existing feedback form.
-const FEEDBACK_ENDPOINT: string = "";
-const FEEDBACK_REASONS = [
-  "Found a bug",
-  "Missing a feature I need",
-  "Switching to something else",
-  "Other",
-];
 
 const screenVariants = {
   initial: { opacity: 0, y: 10 },
@@ -156,18 +154,9 @@ function Toggle({
   );
 }
 
-function buildFeedbackUrl(reason: string, comment: string, appVersion: string): string {
-  const params = new URLSearchParams({
-    template: "uninstall_feedback.yml",
-    title: `Uninstall feedback: ${reason}`,
-    reason,
-    comment: comment.trim(),
-    version: appVersion || "unknown",
-  });
-  return `${FEEDBACK_ENDPOINT}?${params.toString()}`;
-}
-
 export default function App() {
+  const lang = getInstallerLanguage();
+  const tFeedback = FEEDBACK_I18N[lang];
   const [screen, setScreen] = useState<Screen>("loading");
   const [state, setState] = useState<InitialState | null>(null);
   const [installDir, setInstallDir] = useState("");
@@ -180,7 +169,9 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState("");
   const [feedbackReason, setFeedbackReason] = useState<string | null>(null);
   const [feedbackComment, setFeedbackComment] = useState("");
-  const [feedbackSent, setFeedbackSent] = useState(false);
+  const [feedbackBrowserOpened, setFeedbackBrowserOpened] = useState(false);
+  const [feedbackInFlight, setFeedbackInFlight] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const autoStarted = useRef(false);
 
   useEffect(() => {
@@ -280,10 +271,19 @@ export default function App() {
   };
 
   const handleSendFeedback = async () => {
-    if (!feedbackReason || !FEEDBACK_ENDPOINT) return;
+    if (!feedbackReason || !FEEDBACK_ENDPOINT || feedbackInFlight) return;
+    setFeedbackInFlight(true);
+    setFeedbackError(null);
     const url = buildFeedbackUrl(feedbackReason, feedbackComment, state?.appVersion ?? "");
-    await openUrl(url).catch(() => {});
-    setFeedbackSent(true);
+    try {
+      await openUrl(url);
+      setFeedbackBrowserOpened(true);
+    } catch (err) {
+      console.error("Failed to open feedback url in browser:", err);
+      setFeedbackError(tFeedback.openError);
+    } finally {
+      setFeedbackInFlight(false);
+    }
   };
 
   return (
@@ -429,19 +429,22 @@ export default function App() {
               </motion.div>
               <h1>File cleanup scheduled</h1>
 
-              {!feedbackSent ? (
+              {!feedbackBrowserOpened ? (
                 <>
                   <p className="muted feedback-prompt">
-                    <MessageSquareText size={14} strokeWidth={1.75} /> Mind telling us why? Totally optional.
+                    <MessageSquareText size={14} strokeWidth={1.75} /> {tFeedback.prompt}
                   </p>
                   <div className="reason-chips">
                     {FEEDBACK_REASONS.map((r) => (
                       <button
-                        key={r}
-                        className={`chip ${feedbackReason === r ? "chip-selected" : ""}`}
-                        onClick={() => setFeedbackReason(r)}
+                        key={r.id}
+                        className={`chip ${feedbackReason === r.id ? "chip-selected" : ""}`}
+                        onClick={() => {
+                          setFeedbackReason(r.id);
+                          setFeedbackError(null);
+                        }}
                       >
-                        {r}
+                        {lang === "vi" ? r.labelVi : r.labelEn}
                       </button>
                     ))}
                   </div>
@@ -449,30 +452,50 @@ export default function App() {
                     <div className="feedback-textarea-wrap">
                       <textarea
                         className="feedback-textarea"
-                        placeholder="Anything else you'd like to add? (optional)"
+                        placeholder={tFeedback.placeholder}
                         value={feedbackComment}
                         onChange={(e) => setFeedbackComment(e.target.value)}
                       />
                     </div>
                   </div>
                   <p className="muted feedback-note">
-                    Clicking "Send feedback" opens a pre-filled GitHub issue in your browser — you'll see
-                    exactly what's submitted before it sends. Nothing is sent automatically.
+                    {tFeedback.note}
                   </p>
+                  {feedbackError && (
+                    <p
+                      className="feedback-error-text"
+                      style={{
+                        color: "#ef4444",
+                        fontSize: "0.8125rem",
+                        marginTop: "0.5rem",
+                        marginBottom: "0.25rem",
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {feedbackError}
+                    </p>
+                  )}
                   <div className="spacer" />
                   <div className="actions">
-                    <SecondaryButton onClick={() => closeWindow()}>Skip</SecondaryButton>
-                    <PrimaryButton disabled={!feedbackReason || !FEEDBACK_ENDPOINT} onClick={handleSendFeedback}>
-                      Send feedback
+                    <SecondaryButton onClick={() => closeWindow()}>{tFeedback.skipBtn}</SecondaryButton>
+                    <PrimaryButton
+                      disabled={!feedbackReason || !FEEDBACK_ENDPOINT || feedbackInFlight}
+                      onClick={handleSendFeedback}
+                    >
+                      {feedbackInFlight
+                        ? tFeedback.sendingBtn
+                        : feedbackError
+                        ? tFeedback.retryBtn
+                        : tFeedback.sendBtn}
                     </PrimaryButton>
                   </div>
                 </>
               ) : (
                 <>
-                  <p className="muted">Thanks — your browser should have opened to finish sending it.</p>
+                  <p className="muted">{tFeedback.browserOpenedDesc}</p>
                   <div className="spacer" />
                   <div className="actions">
-                    <PrimaryButton onClick={() => closeWindow()}>Close</PrimaryButton>
+                    <PrimaryButton onClick={() => closeWindow()}>{tFeedback.closeBtn}</PrimaryButton>
                   </div>
                 </>
               )}

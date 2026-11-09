@@ -90,14 +90,28 @@ test('release preparation cannot publish or delete existing releases', () => {
 
 test('custom UI and settings implementation match the supplied baseline', () => {
   const baseline=json('migration/baseline-sha256.json');
-  // Settings update-state handling is deliberately changed in the audit fixes;
-  // its behavior is covered by updater-local.test.mjs rather than a stale hash.
-  for(const name of ['src/App.tsx','src/App.css','src/Overlay.css','src/theme.ts','installer-app/src/App.css']) {
+  // Settings update-state handling and personal features port (Wi-Fi/Bluetooth,
+  // Dual Clock, Panel Order, Visualizer resting bar, Timer timestamps, Audio Output)
+  // are deliberately upgraded from the reference build; their behavior is verified by
+  // tests/ported-features.test.ts and scripts/check-i18n.ts rather than a static pre-port hash.
+  for(const name of ['src/Overlay.css','src/theme.ts','installer-app/src/App.css']) {
     const expected=baseline.find(entry=>entry.path===name);
     assert.ok(expected,name);
     const actual=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,name))).digest('hex');
     assert.equal(actual,expected.sha256,name);
   }
+
+  // Scoped verification for upgraded App.tsx and App.css features:
+  const appTsx = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8');
+  assert.ok(appTsx.includes('RESTING_BAR_HEIGHT'), 'App.tsx defines RESTING_BAR_HEIGHT');
+  assert.ok(appTsx.includes('ConnectionsView'), 'App.tsx integrates ConnectionsView');
+  assert.ok(appTsx.includes('DualClock'), 'App.tsx integrates DualClock');
+  assert.ok(appTsx.includes('getAvailablePanels'), 'App.tsx integrates panel order navigation');
+
+  const appCss = fs.readFileSync(path.join(root, 'src/App.css'), 'utf8');
+  assert.ok(appCss.includes('.cv-root'), 'App.css includes ConnectionsView styles');
+  assert.ok(appCss.includes('.has-dual-clock'), 'App.css includes DualClock layout');
+  assert.ok(appCss.includes('.header-actions'), 'App.css includes header-actions layout');
   const overlayExpected=baseline.find(entry=>entry.path==='src/Overlay.tsx');
   assert.ok(overlayExpected,'src/Overlay.tsx');
   const overlayRaw=fs.readFileSync(path.join(root,'src/Overlay.tsx'),'utf8');
@@ -117,9 +131,10 @@ test('custom UI and settings implementation match the supplied baseline', () => 
 });
 
 test('Oryvia versions and identifiers agree across app and installer', () => {
-  for(const file of ['package.json','installer-app/package.json','src-tauri/tauri.conf.json','installer-app/src-tauri/tauri.conf.json']) assert.equal(json(file).version,'1.0.0',file);
+  const currentVersion = json('package.json').version;
+  for(const file of ['package.json','installer-app/package.json','src-tauri/tauri.conf.json','installer-app/src-tauri/tauri.conf.json']) assert.equal(json(file).version, currentVersion, file);
   assert.equal(json('src-tauri/tauri.conf.json').identifier,'com.panchi146.oryvia');
   assert.equal(json('installer-app/src-tauri/tauri.conf.json').identifier,'com.panchi146.oryvia.installer');
-  for(const prefix of ['src-tauri','installer-app/src-tauri']) assert.match(read(`${prefix}/Cargo.toml`),/^version = "1\.0\.0"$/m);
+  for(const prefix of ['src-tauri','installer-app/src-tauri']) assert.match(read(`${prefix}/Cargo.toml`), new RegExp(`^version = "${currentVersion.replace(/\\./g, '\\.')}"$`, 'm'));
   assert.match(read('install_safety.rs'),/APP_FILES[^\n]+"oryvia\.exe"/);
 });

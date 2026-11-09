@@ -4,10 +4,19 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { getVersion } from "@tauri-apps/api/app";
 import { type UpdateCheckResult, type UpdateStatus, statusFromUpdateResult, statusFromUpdateError, finishUpdateActivity } from "../updater";
+import { getStoredLanguage, translate } from "../i18n";
 import { useSettingsSync } from "../hooks/useSettingsSync";
 import { hexToHsl } from "../theme";
-import { getStoredLanguage, translate } from "../i18n";
-import type { WidgetConfig, MonitorInfo, MonitorMode } from "./types";
+import type { WidgetConfig, MonitorInfo, MonitorMode, NectarPanel, PanelOrderMode } from "./types";
+import {
+  DEFAULT_PANEL_ORDER,
+  normalizePanelOrder,
+  normalizePanelOrderMode,
+} from "../components/PanelOrderConfig";
+import {
+  DEFAULT_DUAL_CLOCK_TIMEZONE,
+  normalizeTimezone,
+} from "../components/DualClock";
 
 function saveSetting(key: string, value: string) {
   localStorage.setItem(key, value);
@@ -25,6 +34,12 @@ export function useSettings() {
   const [timerEnabled, setTimerEnabled] = useState(true);
   const [timerSoundEnabled, setTimerSoundEnabled] = useState(true);
   const [stopwatchEnabled, setStopwatchEnabled] = useState(true);
+  const [dualClockEnabled, setDualClockEnabled] = useState(
+    () => localStorage.getItem("nectar-dual-clock-enabled") === "true"
+  );
+  const [dualClockTimezone, setDualClockTimezone] = useState(() =>
+    normalizeTimezone(localStorage.getItem("nectar-dual-clock-timezone") || DEFAULT_DUAL_CLOCK_TIMEZONE)
+  );
   const [musicModeEnabled, setMusicModeEnabled] = useState(true);
   const [musicCompactNotch, setMusicCompactNotch] = useState(true);
   const [volumeOverlayEnabled, setVolumeOverlayEnabled] = useState(true);
@@ -67,6 +82,12 @@ export function useSettings() {
     left: ["weather"],
     right: ["battery"],
   });
+  const [panelOrderMode, setPanelOrderMode] = useState<PanelOrderMode>(() =>
+    normalizePanelOrderMode(localStorage.getItem("nectar-panel-order-mode"))
+  );
+  const [panelOrder, setPanelOrder] = useState<NectarPanel[]>(() =>
+    normalizePanelOrder(localStorage.getItem("nectar-panel-order"))
+  );
   const [dockEnabled, setDockEnabled] = useState(
     () => localStorage.getItem("nectar-dock-enabled") === "true"
   );
@@ -193,6 +214,8 @@ export function useSettings() {
       apply(getVal("nectar-timer-enabled") ?? getVal("nectar-calendar-enabled"), setTimerEnabled, readBool);
       apply(getVal("nectar-timer-sound-enabled"), setTimerSoundEnabled, readBool);
       apply(getVal("nectar-stopwatch-enabled") ?? getVal("nectar-calendar-enabled"), setStopwatchEnabled, readBool);
+      apply(getVal("nectar-dual-clock-enabled"), setDualClockEnabled, readBool);
+      apply(getVal("nectar-dual-clock-timezone"), setDualClockTimezone, normalizeTimezone);
       apply(getVal("nectar-music-mode-enabled"), setMusicModeEnabled, readBool);
       apply(getVal("nectar-music-compact-notch"), setMusicCompactNotch, readBool);
       apply(getVal("nectar-volume-overlay-enabled"), setVolumeOverlayEnabled, readBool);
@@ -267,6 +290,15 @@ export function useSettings() {
           }
         } catch {}
       }
+
+      const panelModeVal = getVal("nectar-panel-order-mode");
+      if (panelModeVal !== null) {
+        setPanelOrderMode(normalizePanelOrderMode(panelModeVal));
+      }
+      const panelOrderVal = getVal("nectar-panel-order");
+      if (panelOrderVal !== null) {
+        setPanelOrder(normalizePanelOrder(panelOrderVal));
+      }
     } catch (e) {
       console.error("Failed to load settings:", e);
     }
@@ -324,6 +356,8 @@ export function useSettings() {
     "nectar-timer-enabled": setTimerEnabled,
     "nectar-timer-sound-enabled": setTimerSoundEnabled,
     "nectar-stopwatch-enabled": setStopwatchEnabled,
+    "nectar-dual-clock-enabled": setDualClockEnabled,
+    "nectar-dual-clock-timezone": (v: any) => setDualClockTimezone(normalizeTimezone(v)),
     "nectar-music-mode-enabled": setMusicModeEnabled,
     "nectar-music-compact-notch": setMusicCompactNotch,
     "nectar-media-ambience-enabled": setMediaAmbienceEnabled,
@@ -353,6 +387,8 @@ export function useSettings() {
         }
       } catch {}
     },
+    "nectar-panel-order-mode": (v: any) => setPanelOrderMode(normalizePanelOrderMode(v)),
+    "nectar-panel-order": (v: any) => setPanelOrder(normalizePanelOrder(v)),
     "nectar-theme-mode": setThemeMode,
     "nectar-theme-color": setThemeColor,
     "nectar-theme-opacity": setThemeOpacity,
@@ -513,6 +549,18 @@ export function useSettings() {
     const next = !stopwatchEnabled;
     setStopwatchEnabled(next);
     saveSetting("nectar-stopwatch-enabled", String(next));
+  };
+
+  const toggleDualClockEnabled = () => {
+    const next = !dualClockEnabled;
+    setDualClockEnabled(next);
+    saveSetting("nectar-dual-clock-enabled", String(next));
+  };
+
+  const handleDualClockTimezoneChange = (tz: string) => {
+    const valid = normalizeTimezone(tz);
+    setDualClockTimezone(valid);
+    saveSetting("nectar-dual-clock-timezone", valid);
   };
 
   const toggleMusicMode = () => {
@@ -735,6 +783,23 @@ export function useSettings() {
   const handleWidgetsChange = (config: WidgetConfig) => {
     setStatusWidgets(config);
     saveSetting("nectar-status-widgets", JSON.stringify(config));
+  };
+
+  const handlePanelOrderModeChange = (mode: PanelOrderMode) => {
+    const valid = normalizePanelOrderMode(mode);
+    setPanelOrderMode(valid);
+    saveSetting("nectar-panel-order-mode", valid);
+  };
+
+  const handlePanelOrderChange = (order: NectarPanel[]) => {
+    const valid = normalizePanelOrder(order);
+    setPanelOrder(valid);
+    saveSetting("nectar-panel-order", JSON.stringify(valid));
+  };
+
+  const resetPanelOrder = () => {
+    setPanelOrder([...DEFAULT_PANEL_ORDER]);
+    saveSetting("nectar-panel-order", JSON.stringify(DEFAULT_PANEL_ORDER));
   };
 
   // ── Theme handlers ──
@@ -1028,6 +1093,10 @@ export function useSettings() {
     toggleTimerSound,
     stopwatchEnabled,
     toggleStopwatchEnabled,
+    dualClockEnabled,
+    toggleDualClockEnabled,
+    dualClockTimezone,
+    handleDualClockTimezoneChange,
     musicModeEnabled,
     toggleMusicMode,
     musicCompactNotch,
@@ -1052,9 +1121,14 @@ export function useSettings() {
     selectCity,
     handleCityClear,
 
-    // Widgets
+    // Widgets & Panel Order
     statusWidgets,
     handleWidgetsChange,
+    panelOrderMode,
+    panelOrder,
+    handlePanelOrderModeChange,
+    handlePanelOrderChange,
+    resetPanelOrder,
     hasBattery,
 
     // Dock

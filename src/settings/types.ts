@@ -17,6 +17,10 @@ export interface MonitorInfo {
 
 export type MonitorMode = "primary" | "all" | "specific";
 
+export type NectarPanel = "command-center" | "status" | "music" | "calendar";
+
+export type PanelOrderMode = "smart" | "custom";
+
 export type SettingsTab = "general" | "appearance" | "notch" | "dock" | "overlays" | "about" | "calendar-sync";
 
 export interface SettingRowProps {

@@ -1,4 +1,4 @@
-use std::sync::{atomic::{AtomicBool, AtomicU8, AtomicI64, AtomicI32, Ordering}, Mutex, OnceLock};
+﻿use std::sync::{atomic::{AtomicBool, AtomicU8, AtomicI64, AtomicI32, Ordering}, Mutex, OnceLock};
 use std::sync::mpsc::{channel, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
@@ -3379,7 +3379,8 @@ pub fn start_window_style_guard(app: AppHandle) {
                     GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_EX_TOPMOST,
                 };
                 let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as usize;
-                let want = (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) as usize;
+                let keyboard = crate::state::KEYBOARD_FOCUS_LABEL.lock().ok().is_some_and(|l| l.as_deref() == Some(label.as_str()));
+                let want = if keyboard { WS_EX_TOOLWINDOW.0 as usize } else { (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) as usize };
                 if ex & want != want {
                     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex | want) as isize);
                 }

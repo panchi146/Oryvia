@@ -3,7 +3,7 @@
   "private": true,
   "author": "Panchi146",
   "license": "GPL-3.0-only",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",

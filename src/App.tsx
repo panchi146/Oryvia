@@ -7,7 +7,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { UpdateCheckResult } from "./updater";
 import "./App.css";
 import { initTheme } from "./theme";
-import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon, VolumeLowIcon, VolumeHighIcon, MusicNoteIcon, AudioOutputIcon } from "./icons";
+import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon, VolumeLowIcon, MusicNoteIcon, AudioOutputIcon } from "./icons";
 import { CompactMediaPlayer } from "./CompactMediaPlayer";
 import { useWeather } from "./hooks/useWeather";
 import { useSettingsSync } from "./hooks/useSettingsSync";
@@ -16,9 +16,19 @@ import { useCaldav } from "./hooks/useCaldav";
 import { useI18n } from "./i18n";
 import { NotchCalendar } from "./components/NotchCalendar";
 import { NotchClock, StopwatchReadout } from "./components/NotchClock";
+import { DualClock, DEFAULT_DUAL_CLOCK_TIMEZONE, normalizeTimezone } from "./components/DualClock";
 import { ShortcutsBar } from "./components/ShortcutsBar";
+import { ConnectionsView } from "./components/ConnectionsView";
 import { useStopwatch } from "./hooks/useStopwatch";
 import type { WidgetConfig } from "./components/StatusWidgetConfig";
+import {
+  computeMusicDisplayModes,
+  getAvailablePanels,
+  getNextPanelOnWheel,
+  normalizePanelOrder,
+  normalizePanelOrderMode,
+} from "./components/PanelOrderConfig";
+import type { NectarPanel, PanelOrderMode } from "./settings/types";
 import {
   Cpu,
   MemoryStick,
@@ -184,20 +194,64 @@ function GreenDownArrowIcon() {
   );
 }
 
+export const RESTING_BAR_HEIGHT = 0.2;
+
 export const Visualizer = memo(function Visualizer({ isPlaying, bars = 5, height = 20 }: { isPlaying: boolean; bars?: number; height?: number }) {
   const barRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const targetsRef = useRef<number[]>([0.35, 0.65, 0.45, 0.8, 0.5].slice(0, bars));
-  const currentRef = useRef<number[]>([0.35, 0.65, 0.45, 0.8, 0.5].slice(0, bars));
+  const targetsRef = useRef<number[]>(Array(bars).fill(RESTING_BAR_HEIGHT));
+  const currentRef = useRef<number[]>(Array(bars).fill(RESTING_BAR_HEIGHT));
   const rafIdRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!isPlaying) {
-      // Retain last visualizer frame during pause to prevent micro-shrink and abrupt collapse (INC-09)
-      return;
-    }
-
     let isCancelled = false;
     let unlistenFn: (() => void) | null = null;
+
+    if (!isPlaying) {
+      // Smooth decay down to uniform resting level (0.2) when paused, then stop rAF for 0% CPU consumption
+      targetsRef.current.fill(RESTING_BAR_HEIGHT);
+
+      const decayToRest = () => {
+        if (isCancelled) return;
+        const current = currentRef.current;
+        const refs = barRefs.current;
+        let hasMovement = false;
+
+        for (let i = 0; i < bars; i++) {
+          const cur = current[i];
+          const diff = RESTING_BAR_HEIGHT - cur;
+          if (Math.abs(diff) > 0.003) {
+            current[i] = cur + diff * 0.32;
+            hasMovement = true;
+            const el = refs[i];
+            if (el) {
+              el.style.transform = `scaleY(${current[i].toFixed(3)})`;
+            }
+          } else if (cur !== RESTING_BAR_HEIGHT) {
+            current[i] = RESTING_BAR_HEIGHT;
+            const el = refs[i];
+            if (el) {
+              el.style.transform = `scaleY(${RESTING_BAR_HEIGHT})`;
+            }
+          }
+        }
+
+        if (hasMovement) {
+          rafIdRef.current = requestAnimationFrame(decayToRest);
+        } else {
+          rafIdRef.current = null;
+        }
+      };
+
+      rafIdRef.current = requestAnimationFrame(decayToRest);
+
+      return () => {
+        isCancelled = true;
+        if (rafIdRef.current !== null) {
+          cancelAnimationFrame(rafIdRef.current);
+          rafIdRef.current = null;
+        }
+      };
+    }
 
     listen<{ frequencies: number[] }>("audio-visualization", (event) => {
       if (isCancelled) return;
@@ -206,7 +260,7 @@ export const Visualizer = memo(function Visualizer({ isPlaying, bars = 5, height
       const count = Math.min(bars, data.length);
       const targets = targetsRef.current;
       for (let i = 0; i < count; i++) {
-        targets[i] = Math.max(0.2, data[i]);
+        targets[i] = Math.max(RESTING_BAR_HEIGHT, data[i]);
       }
     }).then((fn) => {
       if (isCancelled) {
@@ -262,7 +316,7 @@ export const Visualizer = memo(function Visualizer({ isPlaying, bars = 5, height
           ref={(el) => { barRefs.current[i] = el; }}
           className="bar-horizontal"
           style={{
-            transform: `scaleY(${currentRef.current[i] || 0.2})`,
+            transform: `scaleY(${currentRef.current[i] || RESTING_BAR_HEIGHT})`,
             opacity: 0.95,
           }}
         />
@@ -443,6 +497,10 @@ function App() {
   const pauseGraceTimerRef = useRef<any>(null);
   const pauseFadeTimerRef = useRef<any>(null);
   const prevPlayingRef = useRef<boolean>(false);
+  const isPlayingRef = useRef<boolean>(false);
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
   const [mediaInfo, setMediaInfo] = useState<MediaInfo>({
     title: "",
     artist: "",
@@ -453,6 +511,7 @@ function App() {
   const [albumArtKey, setAlbumArtKey] = useState(0);
   const [volume, setVolume] = useState(0.5);
   const [isMuted, setIsMuted] = useState(false);
+  const lastNonZeroVolumeRef = useRef(0.5);
   // Sliders show 0 while muted, like the overlay.
   const displayVolume = isMuted ? 0 : volume;
   // null until the first fetch so the pill doesn't flash a wrong default.
@@ -470,6 +529,22 @@ function App() {
   const [netUpSpeed, setNetUpSpeed] = useState(0);
   const [netDownSpeed, setNetDownSpeed] = useState(0);
   const [statusWidgets, setStatusWidgets] = useState<WidgetConfig>({ left: ["weather"], right: ["battery"] });
+  const [panelOrderMode, setPanelOrderMode] = useState<PanelOrderMode>(() =>
+    normalizePanelOrderMode(localStorage.getItem("nectar-panel-order-mode"))
+  );
+  const [panelOrder, setPanelOrder] = useState<NectarPanel[]>(() =>
+    normalizePanelOrder(localStorage.getItem("nectar-panel-order"))
+  );
+  const panelOrderModeRef = useRef<PanelOrderMode>(panelOrderMode);
+  const panelOrderRef = useRef<NectarPanel[]>(panelOrder);
+
+  useEffect(() => {
+    panelOrderModeRef.current = panelOrderMode;
+  }, [panelOrderMode]);
+
+  useEffect(() => {
+    panelOrderRef.current = panelOrder;
+  }, [panelOrder]);
 
   const [windowLabel, setWindowLabel] = useState<string>("");
   useEffect(() => {
@@ -759,9 +834,19 @@ function App() {
   const [settingsStopwatchEnabled, setSettingsStopwatchEnabled] = useState(
     () => (localStorage.getItem("nectar-stopwatch-enabled") ?? localStorage.getItem("nectar-calendar-enabled")) !== "false",
   );
+  const [settingsDualClockEnabled, setSettingsDualClockEnabled] = useState(
+    () => localStorage.getItem("nectar-dual-clock-enabled") === "true",
+  );
+  const [settingsDualClockTimezone, setSettingsDualClockTimezone] = useState(
+    () => normalizeTimezone(localStorage.getItem("nectar-dual-clock-timezone") || DEFAULT_DUAL_CLOCK_TIMEZONE),
+  );
   const showClockColumn = settingsTimerEnabled || settingsStopwatchEnabled;
-  const productivityEnabled = settingsCalendarEnabled || showClockColumn;
+  const productivityEnabled = settingsCalendarEnabled || showClockColumn || settingsDualClockEnabled;
   const [settingsMusicModeEnabled, setSettingsMusicModeEnabled] = useState(() => localStorage.getItem("nectar-music-mode-enabled") !== "false");
+  const settingsMusicModeEnabledRef = useRef(settingsMusicModeEnabled);
+  useEffect(() => {
+    settingsMusicModeEnabledRef.current = settingsMusicModeEnabled;
+  }, [settingsMusicModeEnabled]);
   const [settingsMusicCompactNotch, setSettingsMusicCompactNotch] = useState(() => localStorage.getItem("nectar-music-compact-notch") !== "false");
   const [settingsVisualizerEnabled, setSettingsVisualizerEnabled] = useState(() => localStorage.getItem("nectar-visualizer-enabled") !== "false");
   const [settingsAlbumArtEnabled, setSettingsAlbumArtEnabled] = useState(() => localStorage.getItem("nectar-media-album-art-enabled") !== "false");
@@ -812,6 +897,8 @@ function App() {
       setSettingsTimerEnabled((getVal("nectar-timer-enabled") ?? getVal("nectar-calendar-enabled", "true")) !== "false");
       setSettingsTimerSoundEnabled(getVal("nectar-timer-sound-enabled", "true") !== "false");
       setSettingsStopwatchEnabled((getVal("nectar-stopwatch-enabled") ?? getVal("nectar-calendar-enabled", "true")) !== "false");
+      setSettingsDualClockEnabled(getVal("nectar-dual-clock-enabled", "false") === "true");
+      setSettingsDualClockTimezone(normalizeTimezone(getVal("nectar-dual-clock-timezone", DEFAULT_DUAL_CLOCK_TIMEZONE)));
       setSettingsMusicModeEnabled(getVal("nectar-music-mode-enabled", "true") !== "false");
       setSettingsMusicCompactNotch(getVal("nectar-music-compact-notch", "true") !== "false");
       const viz = getVal("nectar-media-visualizer-enabled") ?? getVal("nectar-visualizer-enabled", "true");
@@ -894,6 +981,19 @@ function App() {
           }
         } catch {}
       }
+
+      const panelModeVal = settings["nectar-panel-order-mode"] ?? localStorage.getItem("nectar-panel-order-mode");
+      if (panelModeVal !== null && panelModeVal !== undefined) {
+        const mode = normalizePanelOrderMode(panelModeVal);
+        panelOrderModeRef.current = mode;
+        setPanelOrderMode(mode);
+      }
+      const panelOrderVal = settings["nectar-panel-order"] ?? localStorage.getItem("nectar-panel-order");
+      if (panelOrderVal !== null && panelOrderVal !== undefined) {
+        const order = normalizePanelOrder(panelOrderVal);
+        panelOrderRef.current = order;
+        setPanelOrder(order);
+      }
     }).catch(console.error);
   }, [windowLabel]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -939,6 +1039,8 @@ function App() {
       "nectar-timer-enabled": setSettingsTimerEnabled,
       "nectar-timer-sound-enabled": setSettingsTimerSoundEnabled,
       "nectar-stopwatch-enabled": setSettingsStopwatchEnabled,
+      "nectar-dual-clock-enabled": (v) => setSettingsDualClockEnabled(v === "true" || v === true),
+      "nectar-dual-clock-timezone": (v) => setSettingsDualClockTimezone(normalizeTimezone(v)),
       "nectar-music-mode-enabled": setSettingsMusicModeEnabled,
       "nectar-music-compact-notch": setSettingsMusicCompactNotch,
       "nectar-media-visualizer-enabled": setSettingsVisualizerEnabled,
@@ -963,6 +1065,16 @@ function App() {
             setStatusWidgets(parsed);
           }
         } catch {}
+      },
+      "nectar-panel-order-mode": (value) => {
+        const mode = normalizePanelOrderMode(value);
+        panelOrderModeRef.current = mode;
+        setPanelOrderMode(mode);
+      },
+      "nectar-panel-order": (value) => {
+        const order = normalizePanelOrder(value);
+        panelOrderRef.current = order;
+        setPanelOrder(order);
       },
       "nectar-show-update-indicator": (value) => setShowUpdateIndicator(String(value) === "true"),
       "nectar-time-format-24h": setTimeFormat24h,
@@ -1007,6 +1119,29 @@ function App() {
   }, [notchMode, windowLabel]);
 
   const [nectarMode, setNectarMode] = useState<'music' | 'calendar' | 'command-center' | 'status'>('status');
+  const [ccView, setCcView] = useState<'main' | 'wifi' | 'bluetooth'>('main');
+  const isKeyboardFocusActiveRef = useRef(false);
+  const isPairingActiveRef = useRef(false);
+  useEffect(() => {
+    if (!isHovered || nectarMode !== 'command-center') {
+      if (isKeyboardFocusActiveRef.current) {
+        isKeyboardFocusActiveRef.current = false;
+        invoke("set_window_keyboard_focus", { enabled: false, seq: null }).catch(() => {});
+      }
+      invoke("bluetooth_stop_discovery").catch(() => {});
+      setCcView('main');
+    }
+  }, [isHovered, nectarMode]);
+
+  useEffect(() => {
+    // Safe reset of keyboard focus on mount and browser/webview unload/reload
+    invoke("set_window_keyboard_focus", { enabled: false, seq: null }).catch(() => {});
+    const onBeforeUnload = () => {
+      invoke("set_window_keyboard_focus", { enabled: false, seq: null }).catch(() => {});
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, []);
   const [isShortcutsEmpty, setIsShortcutsEmpty] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem("nectar-shortcuts");
@@ -1045,7 +1180,7 @@ function App() {
   }, []);
 
   const checkMouseAndCollapseIfNeeded = useCallback(() => {
-    if (isPickerActiveRef.current || isDraggingFileRef.current || isAddMenuOpenRef.current || isDevPinnedRef.current) {
+    if (isPickerActiveRef.current || isDraggingFileRef.current || isAddMenuOpenRef.current || isDevPinnedRef.current || isKeyboardFocusActiveRef.current || isPairingActiveRef.current) {
       return;
     }
 
@@ -1070,6 +1205,7 @@ function App() {
     if (!isMouseInside) {
       setIsHovered(false);
       setIsNotchHovered(false);
+      isHoveredRef.current = false;
       const targetMode = mediaInfo.has_media && (isPlaying || isMusicPauseGraceRef.current) && settingsMusicCompactNotch ? 'music' : 'status';
       setNectarMode(targetMode);
     }
@@ -1077,13 +1213,22 @@ function App() {
 
   useEffect(() => {
     const handleWindowFocus = () => {
-      if (!isPickerActiveRef.current && !isAddMenuOpenRef.current && !isDraggingFileRef.current && !isDevPinnedRef.current) {
+      if (!isPickerActiveRef.current && !isAddMenuOpenRef.current && !isDraggingFileRef.current && !isDevPinnedRef.current && !isKeyboardFocusActiveRef.current && !isPairingActiveRef.current) {
+        setTimeout(checkMouseAndCollapseIfNeeded, 60);
+      }
+    };
+    const handleWindowBlur = () => {
+      if (isKeyboardFocusActiveRef.current) {
+        isKeyboardFocusActiveRef.current = false;
+        invoke("set_window_keyboard_focus", { enabled: false, seq: null }).catch(() => {});
         setTimeout(checkMouseAndCollapseIfNeeded, 60);
       }
     };
     window.addEventListener('focus', handleWindowFocus);
+    window.addEventListener('blur', handleWindowBlur);
     return () => {
       window.removeEventListener('focus', handleWindowFocus);
+      window.removeEventListener('blur', handleWindowBlur);
     };
   }, [checkMouseAndCollapseIfNeeded]);
 
@@ -1406,7 +1551,10 @@ function App() {
     const target = e.target as HTMLElement;
     if (
       target.closest('.cal-scroll') ||
-      target.closest('.shortcuts-scroll-area')
+      target.closest('.shortcuts-scroll-area') ||
+      target.closest('.cv-root') ||
+      target.closest('.cv-container') ||
+      target.closest('.cv-list')
     ) {
       return;
     }
@@ -1425,30 +1573,24 @@ function App() {
     const direction = wheelAccumRef.current > 0 ? 1 : -1;
     wheelAccumRef.current = 0;
 
-    // Music shifts position based on playing state:
-    // Playing: command-center → music → status → calendar (active, near command-center)
-    // Paused:  command-center → status → music → calendar (secondary, after status)
-    const musicBeforeStatus = (isPlaying || isMusicPauseGraceRef.current) && mediaInfo.has_media && settingsMusicModeEnabled;
-    const modes: ('command-center' | 'status' | 'music' | 'calendar')[] = musicBeforeStatus
-      ? ['command-center', 'music', 'status', 'calendar']
-      : ['command-center', 'status', 'music', 'calendar'];
-    const availableModes = modes.filter(m => {
-      if (m === 'music' && (!settingsMusicModeEnabled || !mediaInfo.has_media)) return false;
-      if (m === 'calendar' && !productivityEnabled) return false;
-      return true;
+    // Compute available panels in Smart or Custom order
+    const currentMode = panelOrderModeRef.current;
+    const currentOrder = panelOrderRef.current;
+    const availableModes = getAvailablePanels({
+      mode: currentMode,
+      customOrder: currentOrder,
+      isPlayingOrGrace: Boolean(isPlaying || isMusicPauseGraceRef.current),
+      hasMedia: mediaInfo.has_media,
+      musicModeEnabled: settingsMusicModeEnabled,
+      productivityEnabled,
     });
+    if (availableModes.length <= 1) return;
 
     setIsHovered(true);
-    setNectarMode((prevMode) => {
-      const currentIndex = availableModes.indexOf(prevMode);
-      if (currentIndex === -1) return prevMode;
-
-      const nextIndex = (currentIndex + direction + availableModes.length) % availableModes.length;
-      const nextMode = availableModes[nextIndex];
-      manualMusicRef.current = nextMode === 'music';
-      return nextMode;
-    });
-  }, [isHovered, nectarMode, isPlaying, mediaInfo.has_media, settingsMusicModeEnabled, productivityEnabled, settingsNotchScrollSensitivity]);
+    const nextMode = getNextPanelOnWheel(nectarMode, direction, availableModes);
+    manualMusicRef.current = nextMode === 'music';
+    setNectarMode(nextMode);
+  }, [isHovered, nectarMode, isPlaying, mediaInfo.has_media, settingsMusicModeEnabled, productivityEnabled, settingsNotchScrollSensitivity, panelOrderMode, panelOrder]);
 
 
 
@@ -1457,7 +1599,8 @@ function App() {
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [isCompactTimerVisible, setIsCompactTimerVisible] = useState(false);
   const [isTimerFinished, setIsTimerFinished] = useState(false);
-  const timerIntervalRef = useRef<any>(null);
+  const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerTargetEndMsRef = useRef<number | null>(null);
 
   const formatTimerTime = (totalSeconds: number) => {
     const mins = Math.floor(Math.abs(totalSeconds) / 60);
@@ -1468,16 +1611,30 @@ function App() {
   const startTimerSeconds = (seconds: number) => {
     // Unlock audio on this click so the chime can play later.
     getTimerChimeCtx();
-    setTimerSeconds(seconds);
+    const safeSeconds = Math.max(1, Math.floor(seconds));
+    timerTargetEndMsRef.current = Date.now() + safeSeconds * 1000;
+    setTimerSeconds(safeSeconds);
     setIsTimerRunning(true);
     setIsTimerFinished(false);
   };
 
   const toggleTimer = () => {
-    if (!isTimerRunning) getTimerChimeCtx();
-    setIsTimerRunning(!isTimerRunning);
+    if (!isTimerRunning) {
+      if (timerSeconds <= 0) return;
+      getTimerChimeCtx();
+      timerTargetEndMsRef.current = Date.now() + timerSeconds * 1000;
+      setIsTimerRunning(true);
+    } else {
+      if (timerTargetEndMsRef.current !== null) {
+        const remaining = Math.max(0, Math.ceil((timerTargetEndMsRef.current - Date.now()) / 1000));
+        setTimerSeconds(remaining);
+      }
+      timerTargetEndMsRef.current = null;
+      setIsTimerRunning(false);
+    }
   };
   const resetTimer = () => {
+    timerTargetEndMsRef.current = null;
     setIsTimerRunning(false);
     setTimerSeconds(0);
     setIsTimerFinished(false);
@@ -1494,18 +1651,55 @@ function App() {
   }, [settingsStopwatchEnabled]);
 
   useEffect(() => {
-    if (isTimerRunning && timerSeconds > 0) {
-      timerIntervalRef.current = setInterval(() => {
-        setTimerSeconds(s => s - 1);
-      }, 1000);
-    } else if (isTimerRunning && timerSeconds === 0) {
+    if (!isTimerRunning) {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+      return;
+    }
+
+    if (timerSeconds <= 0) {
+      timerTargetEndMsRef.current = null;
       setIsTimerRunning(false);
       setIsTimerFinished(true);
+      return;
     }
-    return () => {
-      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+
+    if (timerTargetEndMsRef.current === null) {
+      timerTargetEndMsRef.current = Date.now() + timerSeconds * 1000;
+    }
+
+    const syncTimerRemaining = () => {
+      if (timerTargetEndMsRef.current === null) return;
+      const remaining = Math.max(0, Math.ceil((timerTargetEndMsRef.current - Date.now()) / 1000));
+      if (remaining <= 0) {
+        timerTargetEndMsRef.current = null;
+        if (timerIntervalRef.current) {
+          clearInterval(timerIntervalRef.current);
+          timerIntervalRef.current = null;
+        }
+        setTimerSeconds(0);
+        setIsTimerRunning(false);
+        setIsTimerFinished(true);
+      } else {
+        setTimerSeconds(prev => (prev !== remaining ? remaining : prev));
+      }
     };
-  }, [isTimerRunning, timerSeconds === 0]);
+
+    timerIntervalRef.current = setInterval(syncTimerRemaining, 250);
+    window.addEventListener("focus", syncTimerRemaining);
+    document.addEventListener("visibilitychange", syncTimerRemaining);
+
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+      window.removeEventListener("focus", syncTimerRemaining);
+      document.removeEventListener("visibilitychange", syncTimerRemaining);
+    };
+  }, [isTimerRunning]);
 
   // On finish: chime, and peek the notch.
   const prevTimerFinishedRef = useRef(false);
@@ -1534,8 +1728,10 @@ function App() {
 
     // Only auto-switch if music mode is enabled
     if (settingsMusicModeEnabled && mediaInfo.has_media && isPlaying && nectarMode !== 'calendar' && (isNewTrackWhilePlaying || justStartedPlaying)) {
-      // Switch if compact notch display is enabled OR we are hovered
-      if ((settingsMusicCompactNotch || isHovered) && !isPickerActiveRef.current && !isDraggingFileRef.current && !isAddMenuOpen) {
+      // In Custom mode, protect active manual interaction: if user is hovered and viewing another panel, do not hijack
+      if (panelOrderModeRef.current === 'custom' && isHovered && nectarMode !== 'music') {
+        // do not switch away from current panel in Custom mode
+      } else if ((settingsMusicCompactNotch || isHovered) && !isPickerActiveRef.current && !isDraggingFileRef.current && !isAddMenuOpen) {
         manualMusicRef.current = false;
         setNectarMode('music');
       }
@@ -1575,7 +1771,9 @@ function App() {
           // Step 2: Once fade-out finishes (200ms), end grace period and transition to status mode
           setIsMusicFadingOut(false);
           setIsMusicPauseGraceSync(false);
-          if (!manualMusicRef.current) {
+          if (!isHoveredRef.current) {
+            setNectarMode((cur) => (cur === 'music' ? 'status' : cur));
+          } else if (panelOrderModeRef.current !== 'custom' && !manualMusicRef.current) {
             setNectarMode((cur) => (cur === 'music' ? 'status' : cur));
           }
         }, 200);
@@ -1586,11 +1784,18 @@ function App() {
       setIsMusicFadingOut(false);
       setIsMusicPauseGraceSync(false);
     } else if (!mediaInfo.has_media) {
-      // Media session ended: clear immediately
-      clearAllTimers();
-      setIsMusicFadingOut(false);
-      setIsMusicPauseGraceSync(false);
-      setNectarMode((cur) => (cur === 'music' ? 'status' : cur));
+      // Media session ended: only clear immediately if we are NOT in active pause grace period
+      // to protect against transient empty session packets from Windows GSMTC during pause transitions
+      if (!isMusicPauseGraceRef.current) {
+        clearAllTimers();
+        setIsMusicFadingOut(false);
+        setIsMusicPauseGraceSync(false);
+        if (!isHoveredRef.current) {
+          setNectarMode((cur) => (cur === 'music' ? 'status' : cur));
+        } else if (panelOrderModeRef.current !== 'custom' && !manualMusicRef.current) {
+          setNectarMode((cur) => (cur === 'music' ? 'status' : cur));
+        }
+      }
     }
   }, [isPlaying, mediaInfo.has_media, settingsMusicModeEnabled, setIsMusicPauseGraceSync]);
 
@@ -1702,6 +1907,9 @@ function App() {
   useEffect(() => {
     const unlisten = listen<{ volume: number; is_muted: boolean }>("volume-change", (event) => {
       setVolume(event.payload.volume);
+      if (event.payload.volume > 0) {
+        lastNonZeroVolumeRef.current = event.payload.volume;
+      }
       setIsMuted(event.payload.is_muted);
     });
     return () => { unlisten.then(fn => fn()); };
@@ -1749,7 +1957,13 @@ function App() {
     invoke<boolean>("get_battery_saver_state").then(setBatterySaverEnabled).catch(() => { });
     invoke<boolean>("has_battery").then(setHasBattery).catch(() => { });
     invoke<{ volume: number; is_muted: boolean }>("get_volume_state")
-      .then((state) => { setVolume(state.volume); setIsMuted(state.is_muted); })
+      .then((state) => {
+        setVolume(state.volume);
+        if (state.volume > 0) {
+          lastNonZeroVolumeRef.current = state.volume;
+        }
+        setIsMuted(state.is_muted);
+      })
       .catch(() => { });
     invoke<number>("get_brightness").then(setCurrentBrightness).catch(() => { });
 
@@ -1835,6 +2049,12 @@ function App() {
         }
 
         // Update playing state separately for the hook triggers
+        const wasPlaying = isPlayingRef.current;
+        const nextPlaying = info.is_playing;
+        if (wasPlaying && !nextPlaying && (info.has_media || prev.has_media) && settingsMusicModeEnabledRef.current) {
+          // Synchronously activate pause grace in same batch to prevent 1-render flicker / unmount
+          setIsMusicPauseGraceSync(true);
+        }
         setIsPlaying(info.is_playing);
 
         if (info.artwork && info.artwork.length > 0) {
@@ -1895,12 +2115,15 @@ function App() {
   /* Unused saveAndBroadcast removed to fix TS build error */
   const togglePlayPause = useCallback(async () => {
     try {
+      if (isPlaying && mediaInfo.has_media && settingsMusicModeEnabled) {
+        setIsMusicPauseGraceSync(true);
+      }
       await invoke("media_play_pause");
       setIsPlaying(!isPlaying);
     } catch (e) {
       console.error("Failed to toggle play/pause:", e);
     }
-  }, [isPlaying]);
+  }, [isPlaying, mediaInfo.has_media, settingsMusicModeEnabled, setIsMusicPauseGraceSync]);
 
 
   const skipNext = useCallback(async () => {
@@ -1947,10 +2170,24 @@ function App() {
 
   const handleVolumeChange = useCallback((newVol: number) => {
     setVolume(newVol);
+    if (newVol > 0) {
+      lastNonZeroVolumeRef.current = newVol;
+    }
     // set_volume unmutes for any non-zero level.
     setIsMuted(newVol === 0);
     sendVolume(newVol);
   }, [sendVolume]);
+
+  const toggleMute = useCallback(() => {
+    if (displayVolume === 0) {
+      handleVolumeChange(lastNonZeroVolumeRef.current || 0.3);
+    } else {
+      if (volume > 0) {
+        lastNonZeroVolumeRef.current = volume;
+      }
+      handleVolumeChange(0);
+    }
+  }, [displayVolume, volume, handleVolumeChange]);
 
 
   // Open WiFi settings
@@ -1997,7 +2234,7 @@ function App() {
       console.error("Failed to open Battery Saver settings:", e);
     }
   }, []);
-  void [batterySaverEnabled, openBatterySaverSettings];
+  void [batterySaverEnabled, openBatterySaverSettings, openWifiSettings];
 
 
   // Brightness change with throttling
@@ -2021,8 +2258,8 @@ function App() {
   const handleWifiRightClick = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    openWifiSettings();
-  }, [openWifiSettings]);
+    setCcView('wifi');
+  }, []);
 
   const toggleDockModeSetting = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -2052,7 +2289,7 @@ function App() {
   const handleBluetoothRightClick = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    invoke("open_bluetooth_settings");
+    setCcView('bluetooth');
   }, []);
 
 
@@ -2141,8 +2378,32 @@ function App() {
     return `${(bytes / (1024 * 1024)).toFixed(1)}M`;
   };
 
-  // Music mode shows any time we have media info (playing or paused) and music mode setting is enabled
-  const isMusicMode = mediaInfo.has_media && nectarMode === 'music' && settingsMusicModeEnabled;
+  const isCalendarMode = nectarMode === 'calendar';
+
+  // Music display modes: separates expanded music player vs collapsed compact notch music
+  const { isExpandedMusicMode, isCompactMusicActive, isMusicMode } = useMemo(() => {
+    return computeMusicDisplayModes({
+      isHovered,
+      isCalendarMode,
+      settingsMusicModeEnabled,
+      settingsMusicCompactNotch,
+      nectarMode,
+      hasMedia: mediaInfo.has_media,
+      panelOrderMode,
+      isPlaying,
+      isMusicPauseGrace,
+    });
+  }, [
+    isHovered,
+    isCalendarMode,
+    settingsMusicModeEnabled,
+    settingsMusicCompactNotch,
+    nectarMode,
+    mediaInfo.has_media,
+    panelOrderMode,
+    isPlaying,
+    isMusicPauseGrace,
+  ]);
 
   const isCompactUpdateIndicatorAllowed = useMemo(() => {
     if (isHovered) return true;
@@ -2160,18 +2421,13 @@ function App() {
       const minW = isShortcutsEmpty ? 380 : 360;
       return Math.max(minW, Math.min(220 + totalWidgets * 65, 480));
     }
-    if (isMusicMode && isHovered) return mediaLayout === 'compact' ? 300 : 340;
+    if (isExpandedMusicMode) return mediaLayout === 'compact' ? 300 : 340;
     if ((showPowerPulse || showLowBatteryPulse || showUpdatePulse) && !isHovered) return 200;
 
     let w = settingsNotchCollapsedWidth;
-    if (isMusicMode) {
-      w = settingsNotchCollapsedWidth;
+    if (isCompactMusicActive) {
       if (settingsVisualizerEnabled && (isPlaying || isMusicPauseGrace)) w += 30;
       if (settingsAlbumArtEnabled) w += 30;
-
-      if (isHovered) {
-        w += 60;
-      }
     }
 
     return w;
@@ -2181,10 +2437,16 @@ function App() {
     if (!isExpanded || isHidden) {
       return isImpacted ? 28.9 : 44.2;
     }
-    if (nectarMode === 'calendar') return isHovered ? (settingsCalendarEnabled ? (caldav.connected ? 350 : 310) : 262) : 36;
+    if (nectarMode === 'calendar') {
+      if (!isHovered) return 36;
+      const dualClockBonus = settingsDualClockEnabled ? 46 : 0;
+      if (settingsCalendarEnabled) return (caldav.connected ? 350 : 310) + dualClockBonus;
+      if (showClockColumn) return 262 + dualClockBonus;
+      return 124;
+    }
     if (nectarMode === 'command-center') return isHovered ? 312 : 36;
     if (nectarMode === 'status') return isHovered ? (isShortcutsEmpty ? 210 : 108) : 36;
-    if (isMusicMode && isHovered) {
+    if (isExpandedMusicMode) {
       const hasProgressBar = (mediaInfo.duration_ms ?? 0) > 0;
       let h = mediaLayout === 'compact' ? (hasProgressBar ? 132 : 116) : 120;
       if (mediaLayout === 'compact') {
@@ -2194,8 +2456,6 @@ function App() {
     }
     return 36;
   };
-
-  const isCalendarMode = nectarMode === 'calendar';
 
   // DEV-ONLY Instrumentation refs & state for tracking exit lifecycle and state snapshots
   const outerExitStartRef = useRef(0);
@@ -2338,7 +2598,7 @@ function App() {
   }, [takeDiagnosticSnapshot]);
 
   // Track outer branch transition start
-  const outerBranchKey = (isHovered && isMusicMode && !isCalendarMode) ? 'expanded-music' : 'standard-view-group';
+  const outerBranchKey = isExpandedMusicMode ? 'expanded-music' : 'standard-view-group';
   const prevOuterBranchRef = useRef(outerBranchKey);
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -2466,22 +2726,42 @@ function App() {
   }, [isHovered, mediaLayout, nectarMode]);
 
   const triggerExpand = useCallback(() => {
+    const wasCollapsed = !isHoveredRef.current;
     setIsHovered(true);
     if (isPickerActiveRef.current || isAddMenuOpenRef.current || isDraggingFileRef.current) {
       return;
     }
-    setNectarMode(prev => {
-      if (prev === 'status' || prev === 'calendar' || prev === 'command-center') {
-        return prev;
-      }
-      return (mediaInfo.has_media && (isPlaying || isMusicPauseGraceRef.current)) ? 'music' : 'status';
-    });
-  }, [isPlaying, mediaInfo.has_media]);
+    if (!wasCollapsed) {
+      return;
+    }
+
+    if (panelOrderModeRef.current === 'custom') {
+      const availablePanels = getAvailablePanels({
+        mode: 'custom',
+        customOrder: panelOrderRef.current,
+        isPlayingOrGrace: Boolean(isPlaying || isMusicPauseGraceRef.current),
+        hasMedia: mediaInfo.has_media,
+        musicModeEnabled: settingsMusicModeEnabled,
+        productivityEnabled,
+      });
+      const firstPanel = availablePanels[0] || 'status';
+      manualMusicRef.current = firstPanel === 'music';
+      setNectarMode(firstPanel);
+    } else {
+      setNectarMode(prev => {
+        if (prev === 'status' || prev === 'calendar' || prev === 'command-center') {
+          return prev;
+        }
+        return (mediaInfo.has_media && (isPlaying || isMusicPauseGraceRef.current)) ? 'music' : 'status';
+      });
+    }
+  }, [isPlaying, mediaInfo.has_media, settingsMusicModeEnabled, productivityEnabled]);
 
   const triggerCollapse = useCallback(() => {
-    if (isPickerActiveRef.current || isDraggingFileRef.current || isAddMenuOpenRef.current || isDevPinnedRef.current) return;
+    if (isPickerActiveRef.current || isDraggingFileRef.current || isAddMenuOpenRef.current || isDevPinnedRef.current || isKeyboardFocusActiveRef.current || isPairingActiveRef.current) return;
     setIsHovered(false);
     setIsNotchHovered(false);
+    isHoveredRef.current = false;
     const targetMode = mediaInfo.has_media && (isPlaying || isMusicPauseGraceRef.current) && settingsMusicCompactNotch ? 'music' : 'status';
     if (nectarMode === 'music') {
       setNectarMode(targetMode);
@@ -2627,7 +2907,7 @@ function App() {
             clearTimeout(hoverTimeoutRef.current);
             hoverTimeoutRef.current = null;
           }
-          if (isPickerActiveRef.current || isDraggingFileRef.current || isAddMenuOpenRef.current) return;
+          if ( isPickerActiveRef.current || isDraggingFileRef.current || isAddMenuOpenRef.current || isKeyboardFocusActiveRef.current || isPairingActiveRef.current) return;
           if (settingsNotchCollapseDelay > 0) {
             if (collapseTimeoutRef.current) clearTimeout(collapseTimeoutRef.current);
             collapseTimeoutRef.current = setTimeout(() => {
@@ -2656,7 +2936,7 @@ function App() {
         )}
 
         <AnimatePresence>
-          {isMusicMode && settingsAmbienceEnabled && albumArtUrl && isHovered && !isCalendarMode && (
+          {isExpandedMusicMode && settingsAmbienceEnabled && albumArtUrl && (
             <motion.div
               className="notch-ambient-glow"
               initial={{ opacity: 0 }}
@@ -2680,7 +2960,7 @@ function App() {
         {/* Compact album-art glow — contained in overflow-hidden wrapper to prevent top edge bleeding */}
         <div className="compact-album-glow-wrapper" aria-hidden="true">
           <AnimatePresence>
-            {!isHovered && isMusicMode && albumArtUrl && settingsCompactGlowEnabled && settingsAlbumArtEnabled && (
+            {isCompactMusicActive && albumArtUrl && settingsCompactGlowEnabled && settingsAlbumArtEnabled && (
               <motion.img
                 key="compact-glow"
                 className="compact-album-glow"
@@ -2706,7 +2986,7 @@ function App() {
               style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative', borderRadius: 'inherit', overflow: 'hidden' }}
             >
               {/* Outer Branch: Direct React switching without AnimatePresence exit queue */}
-              {isHovered && isMusicMode && !isCalendarMode ? (
+              {isExpandedMusicMode ? (
                 <motion.div
                   key="expanded-music"
                   className="expanded-music-container"
@@ -2784,20 +3064,28 @@ function App() {
                       <div className="metadata-controls-section-middle">
                         <div className="track-header-row">
                           <div className="track-info-middle">
-                            <TitleMarquee title={mediaInfo.title} />
+                            <TitleMarquee title={mediaInfo.title || t("notch.music.noMedia")} />
                             <span className="premium-artist">{mediaInfo.artist}</span>
                           </div>
-                          <div className="header-visualizer-wrap">
-                            <div className="header-visualizer">
+                          <div className="header-actions-wrap">
+                            <div className="header-visualizer" aria-hidden="true">
                               <Visualizer isPlaying={isPlaying} bars={5} height={18} />
                             </div>
                             <motion.button
+                              type="button"
                               className="classic-audio-output-btn"
-                              onClick={(e) => { e.stopPropagation(); invoke('open_sound_settings').catch(() => {}); }}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                invoke('open_audio_output_picker').catch(() => {
+                                  invoke('open_sound_settings').catch(() => {});
+                                });
+                              }}
+                              whileHover={{ scale: 1.12 }}
                               whileTap={{ scale: 0.9 }}
-                              data-tooltip={t("notch.music.audioOutput")}
+                              aria-label={t("notch.music.audioOutput")}
                             >
-                              <AudioOutputIcon size={20} style={{ opacity: 0.5 }} />
+                              <AudioOutputIcon size={18} />
                             </motion.button>
                           </div>
                         </div>
@@ -2860,7 +3148,19 @@ function App() {
                         </div>
 
                         <div className="volume-slider-container">
-                          <VolumeLowIcon size={12} style={{ opacity: 0.5 }} />
+                          <motion.button
+                            type="button"
+                            className="volume-mute-btn"
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleMute();
+                            }}
+                            whileTap={{ scale: 0.85 }}
+                            aria-label={t("notch.music.volume")}
+                          >
+                            <VolumeLowIcon size={12} style={{ opacity: displayVolume === 0 ? 0.35 : 0.65 }} />
+                          </motion.button>
                           <div className="slider-track-premium">
                             <input
                               type="range"
@@ -2872,10 +3172,10 @@ function App() {
                               onPointerDown={(e) => e.stopPropagation()}
                               onClick={(e) => e.stopPropagation()}
                               className="premium-slider"
+                              aria-label={t("notch.music.volume")}
                             />
                             <div className="slider-progress-fill" style={{ width: `${displayVolume * 100}%` }} />
                           </div>
-                          <VolumeHighIcon size={14} style={{ opacity: 0.5 }} />
                         </div>
                       </div>
 
@@ -2945,7 +3245,7 @@ function App() {
                                     <UpdateActivity />
                                   </motion.div>
                                 </AnimatePresence>
-                              ) : isMusicMode && settingsVisualizerEnabled ? (
+                              ) : isCompactMusicActive && settingsVisualizerEnabled ? (
                                 <AnimatePresence>
                                   {settingsVisualizerEnabled && (
                                     <motion.div
@@ -2959,7 +3259,7 @@ function App() {
                                     </motion.div>
                                   )}
                                 </AnimatePresence>
-                              ) : (!isMusicMode && isHovered && statusWidgets.left.length > 0) ? (
+                              ) : (!isCompactMusicActive && isHovered && statusWidgets.left.length > 0) ? (
                                 <motion.div
                                   key="left-widgets"
                                   className="passive-features-group"
@@ -3008,7 +3308,7 @@ function App() {
 
                             {/* Right: album art (music) or battery (command-center, calendar) */}
                             <div className="side-content right">
-                              {isMusicMode && settingsAlbumArtEnabled ? (
+                              {isCompactMusicActive && settingsAlbumArtEnabled ? (
                                 <AnimatePresence mode="wait">
                                   <motion.div
                                     key="album-art"
@@ -3078,7 +3378,7 @@ function App() {
                                   </button>
                                   </motion.div>
                                 </AnimatePresence>
-                              ) : (!isMusicMode && isHovered && statusWidgets.right.length > 0) ? (
+                              ) : (!isCompactMusicActive && isHovered && statusWidgets.right.length > 0) ? (
                                 <motion.div
                                   key="right-widgets"
                                   className="passive-features-group"
@@ -3166,6 +3466,7 @@ function App() {
                           transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
                         >
                     {/* Pills Grid */}
+                    <div style={{ display: ccView !== 'main' ? 'none' : 'contents' }}>
                     <div className="cc-pills-grid">
                       {/* Wi-Fi Pill */}
                       <div
@@ -3190,6 +3491,17 @@ function App() {
                           }}
                         >
                           <Settings size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          className="cc-pill-more"
+                          title={t("notch.cc.btn.wifiList")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCcView('wifi');
+                          }}
+                        >
+                          ›
                         </button>
                       </div>
 
@@ -3230,6 +3542,17 @@ function App() {
                           }}
                         >
                           <Settings size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          className="cc-pill-more"
+                          title={t("notch.cc.btn.bluetoothList")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCcView('bluetooth');
+                          }}
+                        >
+                          ›
                         </button>
                       </div>
 
@@ -3460,6 +3783,29 @@ function App() {
                         <span className="cc-classic-percentage">{currentBrightness}%</span>
                       </div>
                     </div>
+                    </div>
+                    {ccView !== 'main' && (
+                      <ConnectionsView
+                        kind={ccView}
+                        onBack={() => setCcView('main')}
+                        onOpenWindowsSettings={() => {
+                          const action = ccView === 'wifi' ? 'wifi_settings' : 'bluetooth_settings';
+                          if (isKeyboardFocusActiveRef.current) {
+                            isKeyboardFocusActiveRef.current = false;
+                            invoke("set_window_keyboard_focus", { enabled: false, seq: null }).catch(() => {});
+                          }
+                          setCcView('main');
+                          launchExternalQuickAction(action);
+                        }}
+                        onWifiChanged={() => { refreshWifiStatus(); }}
+                        onKeyboardFocusChange={(focused) => {
+                          isKeyboardFocusActiveRef.current = focused;
+                        }}
+                        onPairingChange={(pairing) => {
+                          isPairingActiveRef.current = pairing;
+                        }}
+                      />
+                    )}
                   </motion.div>
                 )}
 
@@ -3467,32 +3813,44 @@ function App() {
                 {productivityEnabled && isCalendarMode && isHovered && (
                   <motion.div
                     key="calendar-panel"
-                    className="calendar-timer-content split-view"
+                    className={`calendar-timer-content split-view${settingsDualClockEnabled ? ' has-dual-clock' : ''}`}
                     onClick={e => e.stopPropagation()} /* Block mode switches when clicking inside */
                     initial={{ opacity: 0, y: -6 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -4, transition: { duration: 0.08, ease: "easeOut" } }}
                     transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
                   >
-                    {settingsCalendarEnabled && (
-                      <div className="calendar-column">
-                        <NotchCalendar caldav={caldav} hour12={!timeFormat24h} />
-                      </div>
+                    {settingsDualClockEnabled && (
+                      <DualClock
+                        timezone={settingsDualClockTimezone}
+                        timeFormat24h={timeFormat24h}
+                        standalone={!settingsCalendarEnabled && !showClockColumn}
+                      />
                     )}
 
-                    {showClockColumn && (
-                      <NotchClock
-                        timerEnabled={settingsTimerEnabled}
-                        stopwatchEnabled={settingsStopwatchEnabled}
-                        solo={!settingsCalendarEnabled}
-                        timerSeconds={timerSeconds}
-                        isTimerRunning={isTimerRunning}
-                        formatTimerTime={formatTimerTime}
-                        onStartTimer={startTimerSeconds}
-                        onToggleTimer={toggleTimer}
-                        onResetTimer={resetTimer}
-                        stopwatch={stopwatch}
-                      />
+                    {(settingsCalendarEnabled || showClockColumn) && (
+                      <div className="calendar-timer-columns">
+                        {settingsCalendarEnabled && (
+                          <div className="calendar-column">
+                            <NotchCalendar caldav={caldav} hour12={!timeFormat24h} />
+                          </div>
+                        )}
+
+                        {showClockColumn && (
+                          <NotchClock
+                            timerEnabled={settingsTimerEnabled}
+                            stopwatchEnabled={settingsStopwatchEnabled}
+                            solo={!settingsCalendarEnabled}
+                            timerSeconds={timerSeconds}
+                            isTimerRunning={isTimerRunning}
+                            formatTimerTime={formatTimerTime}
+                            onStartTimer={startTimerSeconds}
+                            onToggleTimer={toggleTimer}
+                            onResetTimer={resetTimer}
+                            stopwatch={stopwatch}
+                          />
+                        )}
+                      </div>
                     )}
                   </motion.div>
                 )}

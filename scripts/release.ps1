@@ -1,7 +1,7 @@
 # Oryvia Release & Review Packaging Script
 # Compatible with Windows PowerShell 5.1 and PowerShell 7+
 param(
-    [string]$Version = "1.0.0",
+    [string]$Version = "1.0.1",
     [string]$Repository = "panchi146/Oryvia",
     [string]$OutputDirectory,
     [string]$PrivateKeyPath = "C:\Users\phamv\.tauri\oryvia-updater.key",

@@ -20,6 +20,8 @@ jobs:
         working-directory: installer-app
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml
       - run: cargo check --locked --manifest-path installer-app/src-tauri/Cargo.toml
+      - uses: oven-sh/setup-bun@v2
+      - run: bun test tests/*.test.ts
       - run: node --test tests/*.test.mjs
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin oryvia
       - run: cargo test --locked --manifest-path installer-app/src-tauri/Cargo.toml

@@ -20,6 +20,7 @@ mod calendar_sync;
 mod ics;
 mod active_look;
 mod drag_drop;
+mod connections;
 
 use tauri::Manager;
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
@@ -99,6 +100,7 @@ fn main() {
             open_tray_window,
             open_wifi_settings,
             open_sound_settings,
+            open_audio_output_picker,
             open_notification_center,
             set_ignore_cursor_events,
             set_window_height,
@@ -138,6 +140,20 @@ fn main() {
             remove_custom_icon,
             get_custom_icons,
             set_menu_open,
+            set_window_keyboard_focus,
+            connections::wifi_status_list,
+            connections::wifi_scan,
+            connections::wifi_connect,
+            connections::wifi_disconnect,
+            connections::wifi_forget,
+            connections::bluetooth_devices,
+            connections::bluetooth_connect,
+            connections::bluetooth_disconnect,
+            connections::bluetooth_unpair,
+            connections::bluetooth_start_discovery,
+            connections::bluetooth_stop_discovery,
+            connections::bluetooth_get_discovered_devices,
+            connections::bluetooth_pair_device,
             focus_window,
             focus_app_windows,
             close_window,

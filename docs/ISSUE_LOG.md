@@ -1339,3 +1339,32 @@ Completed in this pass:
 - Re-verified Ed25519 Minisign signature on `Oryvia_1.0.0_x64-setup.exe` with Key ID `F9F0B18092DA8033` (PASS).
 - Full regression suites PASS (18/18 node tests, `tsc --noEmit` PASS).
 - Detailed report: [docs/chat/2026-11-08_213500_source-archive-fix.md](chat/2026-11-08_213500_source-archive-fix.md).
+
+## Personal Features Port Integration (Wi-Fi, Bluetooth, Dual Clock, Panel Order, Music/Audio, Visualizer, Timer) — 2026-11-09
+
+Status: Integrated and automated test suites PASS; 100% typecheck (0 TS errors), 48 Rust unit tests passed, 32 Bun regression tests passed, 180 i18n keys complete; pending physical Windows hardware testing by user. NOT Verified Fixed.
+
+Completed in this pass:
+- Integrated Wi-Fi & Bluetooth manager (`ConnectionsView.tsx` + `connections.rs`) with WLAN API authoritative state checks, profile safeguards, baseband ACL disconnect guard and WinRT Custom Pairing.
+- Integrated keyboard focus sequence ID guard (`KEYBOARD_FOCUS_SEQ`, `set_window_keyboard_focus`), style guard exclusion, and window flag restoration on blur/close.
+- Integrated Dual Clock (`DualClock.tsx`), timezone options normalization, settings, and zero-IPC i18n.
+- Integrated Panel Order config (`PanelOrderConfig.tsx`), Smart/Custom mode, `@dnd-kit` drag-and-drop, and wheel navigation exclusion.
+- Integrated Music header actions, audio output picker (`Win+Ctrl+V` on Win11 / sound settings fallback), volume mute button, and `AudioOutputIcon`.
+- Integrated Visualizer resting bar height (`0.2`) and pause decay animation.
+- Integrated real-time wall-clock timer timestamps and sleep/resume synchronization.
+- Preserved 100% Oryvia branding, updater pipeline v2, transaction installer/uninstaller, and local settings defaults.
+- Detailed report: [docs/chat/2026-11-09_153045_personal-features-port.md](chat/2026-11-09_153045_personal-features-port.md).
+
+## Uninstall Feedback Button Fix ("Send Feedback" Disabled & Error Handling) — 2026-11-09
+
+Status: Resolved and automated tests PASS; 100% typecheck (0 TS errors), 10 unit tests in `tests/uninstall-feedback.test.ts` PASS, 42 total Bun regression tests PASS, 48 Rust unit tests PASS; pending physical Windows uninstaller verification by user. NOT Verified Fixed.
+
+Completed in this pass:
+- Fixed empty `FEEDBACK_ENDPOINT` by configuring `https://github.com/panchi146/Oryvia/issues/new` with template `uninstall_feedback.yml` in `installer-app/src/lib/feedback.ts`.
+- Replaced custom query serialization with `URLSearchParams` to safely encode Vietnamese Unicode, newlines (`\n`), and special characters (`&`, `?`, `#`).
+- Fixed button state: enabled immediately upon choosing a valid reason; comment remains purely optional. Added `feedbackInFlight` to guard against multiple browser tabs on rapid clicks.
+- Fixed error handling in `handleSendFeedback`: calls `openUrl(url)` with proper error handling; on error, retains reason and comment, presents clear error message, and provides "Try again" action.
+- Refactored post-launch state from "feedback sent" to "browser opened", clearly indicating the pre-filled issue was opened in the user's browser for manual review and submission.
+- Preserved `installer-app/src/App.css` untouched to maintain SHA-256 migration test lock.
+- Documented distribution limitation: existing 1.0.0 local installations require new Custom Setup to update `uninstall.exe` because the in-app updater only updates `oryvia.exe`.
+- Detailed report: [docs/chat/2026-11-09_155915_uninstall-feedback-fix.md](chat/2026-11-09_155915_uninstall-feedback-fix.md).

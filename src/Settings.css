@@ -1814,3 +1814,209 @@ input:checked + .slider:before {
   background: rgba(0, 0, 0, 0.1);
 }
 
+
+/* Panel Order Config */
+.panel-order-config {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+  gap: 10px;
+}
+
+.panel-order-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-order-mode-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.panel-order-mode-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--nectar-text, rgba(255, 255, 255, 0.95));
+}
+
+.panel-order-mode-desc {
+  font-size: 11px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.5));
+  line-height: 1.35;
+}
+
+.panel-order-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--nectar-border, rgba(255, 255, 255, 0.06));
+}
+
+.panel-order-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.panel-order-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--nectar-border, rgba(255, 255, 255, 0.07));
+  transition: background 0.15s ease, border-color 0.15s ease;
+  user-select: none;
+}
+
+.panel-order-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.panel-order-item.dragging {
+  background: rgba(0, 122, 255, 0.15);
+  border-color: rgba(0, 122, 255, 0.4);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+.panel-order-drag-handle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  cursor: grab;
+}
+
+.panel-order-drag-handle:active {
+  cursor: grabbing;
+}
+
+.panel-order-grip {
+  color: var(--text-muted, rgba(255, 255, 255, 0.35));
+  flex-shrink: 0;
+}
+
+.panel-order-index {
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted, rgba(255, 255, 255, 0.7));
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-order-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  flex-shrink: 0;
+}
+
+.panel-order-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.panel-order-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--nectar-text, rgba(255, 255, 255, 0.92));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.panel-order-sub {
+  font-size: 10.5px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.45));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.panel-order-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+.panel-order-reset-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--nectar-border, rgba(255, 255, 255, 0.08));
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--nectar-text, rgba(255, 255, 255, 0.85));
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.panel-order-reset-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.panel-order-reset-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.light-mode .panel-order-body {
+  border-top-color: rgba(0, 0, 0, 0.06);
+}
+
+.light-mode .panel-order-item {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(0, 0, 0, 0.07);
+}
+
+.light-mode .panel-order-item:hover {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+.light-mode .panel-order-index {
+  background: rgba(0, 0, 0, 0.06);
+  color: rgba(26, 26, 28, 0.7);
+}
+
+.light-mode .panel-order-icon {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.light-mode .panel-order-reset-btn {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(0, 0, 0, 0.08);
+  color: #1a1a1c;
+}
+
+.light-mode .panel-order-reset-btn:hover:not(:disabled) {
+  background: #ffffff;
+}
